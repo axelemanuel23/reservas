@@ -16,19 +16,29 @@ function AdminPanel() {
   }, []);
 
   const fetchCanchas = async () => {
-    const res = await axios.get('http://localhost:5000/api/v1/admin/canchas');
+    const res = await axios.get('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/canchas',{  
+      headers : { 
+        "apikey":"axel"
+      }
+    });
     setCanchas(res.data);
   };
 
   const fetchReservas = async () => {
     if (selectedCancha && selectedDate) {
-      const res = await axios.get(`http://localhost:5000/api/v1/admin/reservas/${selectedCancha}/${selectedDate}`);
+      const res = await axios.get(`https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/reservas/${selectedCancha}/${selectedDate}`,{ headers : { "apikey":"axel"}});
       setReservas(res.data);
     }
   };
 
   const handleReserva = async (id, estado) => {
-    await axios.put(`http://localhost:5000/api/v1/admin/reservas/${id}`, { estado });
+    await axios.put(`https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/reservas/${id}`,
+        { estado },
+        { 
+          headers: {
+          "apikey":"axel",
+          }
+        });
     fetchReservas();
   };
 

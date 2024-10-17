@@ -1,5 +1,5 @@
 // components/ClientPanel.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 function ClientPanel() {
@@ -10,6 +10,19 @@ function ClientPanel() {
   const [nombre, setNombre] = useState('');
   const [telefono, setTelefono] = useState('');
 
+  const fetchHorarios = useCallback(async () => {
+    try {
+      const res = await axios.get(`https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/horarios/${selectedCancha}`,{  
+        headers : { 
+          "apikey":"axel"
+        }
+      });
+      setHorarios(res.data);
+    } catch (error) {
+      console.error('Error fetching horarios:', error);
+    }
+  },[selectedCancha]);
+
   useEffect(() => {
     fetchCanchas();
   }, []);
@@ -18,33 +31,34 @@ function ClientPanel() {
     if (selectedCancha) {
       fetchHorarios();
     }
-  }, [selectedCancha]);
+  }, [selectedCancha, fetchHorarios]);
 
+  
   const fetchCanchas = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/api/v1/client/canchas');
+      const res = await axios.get('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/canchas',{  
+        headers : { 
+          "apikey":"axel"
+        }
+      });
       setCanchas(res.data);
     } catch (error) {
       console.error('Error fetching canchas:', error);
     }
   };
 
-  const fetchHorarios = async () => {
-    try {
-      const res = await axios.get(`http://localhost:5000/api/v1/client/horarios/${selectedCancha}`);
-      setHorarios(res.data);
-    } catch (error) {
-      console.error('Error fetching horarios:', error);
-    }
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('http://localhost:5000/api/v1/client/reservas', {
+      await axios.post('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/reservas', {
         horarioId: selectedHorario,
         nombre,
         telefono,
+      },
+      {  
+        headers : { 
+          "apikey":"axel"
+        }
       });
       setSelectedHorario('');
       setNombre('');

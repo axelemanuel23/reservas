@@ -7,9 +7,14 @@ function HorarioForm({ canchaId }) {
 
   const addHorario = async (e) => {
     e.preventDefault();
-    await axios.post('http://localhost:5000/api/v1/admin/horarios', {
+    await axios.post('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/horarios', {
       ...newHorario,
       canchaId
+    },
+    {  
+      headers : { 
+        "apikey":"axel"
+      }
     });
     setNewHorario({ fecha: '', hora: '' });
   };
