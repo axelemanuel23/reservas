@@ -5,7 +5,7 @@ function HorariosList({ reservas, onReservaUpdate, selectedDate }) {
   const [horarios, setHorarios] = useState([]);
 
   const fetchHorarios = async () => {
-    const res = await axios.get(`https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/horarios/${selectedCancha}`,
+    const res = await axios.get(`https://nodejs-backend-arch.onrender.com/api/v1/canchareserva/admin/horarios/${selectedCancha}`,
     {  
       headers : { 
         "apikey":"axel"

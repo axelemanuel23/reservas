@@ -12,7 +12,7 @@ function ClientPanel() {
 
   const fetchHorarios = useCallback(async () => {
     try {
-      const res = await axios.get(`https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/horarios/${selectedCancha}`,{  
+      const res = await axios.get(`https://nodejs-backend-arch.onrender.com/api/v1/canchareserva/client/horarios/${selectedCancha}`,{  
         headers : { 
           "apikey":"axel"
         }
@@ -36,7 +36,7 @@ function ClientPanel() {
   
   const fetchCanchas = async () => {
     try {
-      const res = await axios.get('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/canchas',{  
+      const res = await axios.get('https://nodejs-backend-arch.onrender.com/api/v1/canchareserva/client/canchas',{  
         headers : { 
           "apikey":"axel"
         }
@@ -50,7 +50,7 @@ function ClientPanel() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await axios.post('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/client/reservas', {
+      await axios.post('https://nodejs-backend-arch.onrender.com/api/v1/canchareserva/client/reservas', {
         horarioId: selectedHorario,
         nombre,
         telefono,

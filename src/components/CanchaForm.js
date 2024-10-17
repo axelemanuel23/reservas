@@ -7,7 +7,7 @@ function CanchaForm({ onCanchaAdded }) {
 
   const addCancha = async (e) => {
     e.preventDefault();
-    await axios.post('https://nodejs-backend-arch.onrender.com//api/v1/canchareserva/admin/canchas', newCancha,{  
+    await axios.post('https://nodejs-backend-arch.onrender.com/api/v1/canchareserva/admin/canchas', newCancha,{  
       headers : { 
         "apikey":"axel"
       }
