@@ -684,7 +684,7 @@ export default function App() {
       <section className="card">
         <div className="card-header">
           <div>
-            <h2>Agentes</h2>
+            <h2 className="card-title">Agentes</h2>
             <p className="card-description">Personas disponibles para cubrir las casillas.</p>
           </div>
 
