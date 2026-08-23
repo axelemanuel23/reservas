@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import "./App.css"
 
 const INITIAL_AGENTS = [
   { id: 1, name: "Juan" },
@@ -670,25 +671,22 @@ export default function App() {
   // -------------------------------------------------------
 
   return (
-    <div
-      style={{
-        maxWidth: 1100,
-        margin: "40px auto",
-        padding: "0 20px",
-        fontFamily:
-          "Arial, sans-serif",
-      }}
-    >
-      <h1>
-        Gestión de horarios
-      </h1>
-
+    <div className="app">
+      <div className="container">
+        <header className="header">
+          <h1>Gestión de horarios</h1>
+          <p>Distribución automática de agentes y casillas</p>
+        <header/>
       {/* ================================================= */}
       {/* AGENTES */}
       {/* ================================================= */}
-
-      <section>
-        <h2>Agentes</h2>
+    
+      <section className="card">
+        <div className="card-header">
+          <div>
+            <h2>Agentes</h2>
+            <p className="card-description">Personas disponibles para cubrir las casillas.</p>
+          </div>
 
         {agents.map((agent) => (
           <div
@@ -719,9 +717,12 @@ export default function App() {
           </div>
         ))}
 
-        <button onClick={addAgent}>
+        <button 
+          className="button button-primary"
+          onClick={addAgent}>
           + Agregar agente
         </button>
+        </div>
       </section>
 
       {/* ================================================= */}
@@ -925,14 +926,8 @@ export default function App() {
           {/* ================================================= */}
           {/* TABLA */}
           {/* ================================================= */}
-
-          <table
-            style={{
-              width: "100%",
-              borderCollapse:
-                "collapse",
-            }}
-          >
+          <div className="table-wrapper">
+          <table className="schedule-table">
             <thead>
               <tr>
                 <th
@@ -1040,8 +1035,10 @@ export default function App() {
               )}
             </tbody>
           </table>
+          </div>
         </section>
       )}
+    </div>
     </div>
   );
 }
