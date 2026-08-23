@@ -279,7 +279,7 @@ function assignFlexibleInterval(
       Cuánto le falta a cada agente para llegar
       a su objetivo.
     */
-
+    const currentTime = current;
     const candidates = agents
       .map((agent) => {
         const target =
