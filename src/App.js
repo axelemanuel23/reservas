@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import "./App.css"
+import './App.css';
 
 const INITIAL_AGENTS = [
   { id: 1, name: "Juan" },
