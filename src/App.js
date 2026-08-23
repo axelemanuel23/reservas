@@ -694,7 +694,7 @@ export default function App() {
             className="agent-row"
           >
               <div className="agent-number">
-                {index + 1}
+                {agent.id + 1}
               </div>
             <input
               className="input input-name"
