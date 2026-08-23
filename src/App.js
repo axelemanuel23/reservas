@@ -687,17 +687,17 @@ export default function App() {
             <h2 className="card-title">Agentes</h2>
             <p className="card-description">Personas disponibles para cubrir las casillas.</p>
           </div>
-
+        <div className="agent-list">
         {agents.map((agent) => (
           <div
             key={agent.id}
-            style={{
-              display: "flex",
-              gap: 8,
-              marginBottom: 8,
-            }}
+            className="agent-row"
           >
+              <div className="agent-number">
+                {index + 1}
+              </div>
             <input
+              className="input input-name"
               value={agent.name}
               onChange={(event) =>
                 updateAgent(
@@ -708,6 +708,7 @@ export default function App() {
             />
 
             <button
+              className="button button-danger"
               onClick={() =>
                 removeAgent(agent.id)
               }
@@ -716,6 +717,7 @@ export default function App() {
             </button>
           </div>
         ))}
+        </div>
 
         <button 
           className="button button-primary"
@@ -744,18 +746,14 @@ export default function App() {
           Los intervalos de una sola casilla
           se utilizan para equilibrar las horas.
         </p>
-
+        <div className="demand-list">
         {demand.map((item) => (
           <div
             key={item.id}
-            style={{
-              display: "flex",
-              gap: 10,
-              alignItems: "center",
-              marginBottom: 10,
-            }}
+            className="demand-row"
           >
             <input
+              className="input input-time"
               type="time"
               value={item.start}
               onChange={(event) =>
@@ -767,9 +765,10 @@ export default function App() {
               }
             />
 
-            <span>→</span>
+            <span className="time-arrow">→</span>
 
             <input
+              className="input input-time"
               type="time"
               value={item.end}
               onChange={(event) =>
@@ -781,10 +780,13 @@ export default function App() {
               }
             />
 
-            <label>
-              Casillas:
+            <div className="field">
+                <span className="field-label">
+                  Casillas:
+                </span>
 
               <input
+                className="input input-number"
                 type="number"
                 min="1"
                 value={item.booths}
@@ -795,14 +797,11 @@ export default function App() {
                     event.target.value
                   )
                 }
-                style={{
-                  width: 60,
-                  marginLeft: 5,
-                }}
               />
-            </label>
+            </div>
 
             <button
+              className="button button-danger"
               onClick={() =>
                 removeDemand(item.id)
               }
@@ -811,8 +810,11 @@ export default function App() {
             </button>
           </div>
         ))}
+        </div>
 
-        <button onClick={addDemand}>
+        <button
+          className="button button-secondary"
+          onClick={addDemand}>
           + Agregar intervalo
         </button>
       </section>
@@ -823,12 +825,7 @@ export default function App() {
 
       {result.error && (
         <div
-          style={{
-            marginTop: 30,
-            padding: 15,
-            background: "#ffe5e5",
-            color: "#a00",
-          }}
+          className="error"
         >
           {result.error}
         </div>
@@ -846,43 +843,25 @@ export default function App() {
         >
           <h2>Resultado</h2>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns:
-                "repeat(4, 1fr)",
-              gap: 10,
-              marginBottom: 20,
-            }}
-          >
-            <div
-              style={{
-                padding: 15,
-                background: "#f5f5f5",
-              }}
-            >
-              <strong>
+          <div className="stats" >
+            <div className="stat">
+              <div className="stat-label">
                 Demanda total
-              </strong>
+              </div>
 
-              <div>
+              <div className="stat-value">
                 {formatMinutes(
                   result.stats.totalWork
                 )}
               </div>
             </div>
 
-            <div
-              style={{
-                padding: 15,
-                background: "#f5f5f5",
-              }}
-            >
-              <strong>
-                Objetivo
-              </strong>
+            <div className="stat">
+              <div className="stat-label">
+                Objetivo por agente
+              </div>
 
-              <div>
+              <div className="stat-value">
                 {result.stats.target.toFixed(
                   1
                 )}{" "}
@@ -890,34 +869,28 @@ export default function App() {
               </div>
             </div>
 
-            <div
-              style={{
-                padding: 15,
-                background: "#f5f5f5",
-              }}
-            >
-              <strong>
+            <div className="stat">
+              <div className="stat-label">
                 Menor carga
-              </strong>
+              </div>
 
-              <div>
+              <div className="stat-value" >
                 {formatMinutes(
                   result.stats.minMinutes
                 )}
               </div>
             </div>
 
-            <div
-              style={{
-                padding: 15,
-                background: "#f5f5f5",
-              }}
-            >
-              <strong>
-                Diferencia
-              </strong>
+            <div className="stat">
+              <div className="stat-label">
+                Diferencia Máxima
+              </div>
 
-              <div>
+              <div className={`stat-value ${
+                result.stats.difference <= 1
+                ? "good"
+                : "warning"
+                }`}>
                 {result.stats.difference} min
               </div>
             </div>
@@ -1005,10 +978,9 @@ export default function App() {
                         ) => (
                           <div
                             key={index}
-                            style={{
-                              marginBottom: 4,
-                            }}
+                            className="assignment"
                           >
+                            <span className="assignment-time">
                             {minutesToTime(
                               assignment.start
                             )}
@@ -1016,16 +988,15 @@ export default function App() {
                             {minutesToTime(
                               assignment.end
                             )}
-
-                            {" — Casilla "}
-                            {assignment.booth}
-
+                            </span>
+                            <span className="assignment-booth">
+                            Casilla {assignment.booth}
+                            </span>
                             {" — "}
 
-                            {
-                              assignment.minutes
-                            }{" "}
-                            min
+                            <span>
+                            {assignment.minutes} min
+                            </span>
                           </div>
                         )
                       )}
