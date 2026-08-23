@@ -280,6 +280,7 @@ function assignFlexibleInterval(
       a su objetivo.
     */
     const currentTime = current;
+    
     const candidates = agents
       .map((agent) => {
         const target =
@@ -319,10 +320,10 @@ function assignFlexibleInterval(
           ];
 
         const aContinuity =
-          aLast && aLast.end === current ? 1 : 0;
+          aLast && aLast.end === currentTime ? 1 : 0;
 
         const bContinuity =
-          bLast && bLast.end === current ? 1 : 0;
+          bLast && bLast.end === currentTime ? 1 : 0;
 
         if (aContinuity !== bContinuity) {
           return bContinuity - aContinuity;
