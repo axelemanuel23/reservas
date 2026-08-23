@@ -676,7 +676,7 @@ export default function App() {
         <header className="header">
           <h1>Gestión de horarios</h1>
           <p>Distribución automática de agentes y casillas</p>
-        <header/>
+    </header>
       {/* ================================================= */}
       {/* AGENTES */}
       {/* ================================================= */}
