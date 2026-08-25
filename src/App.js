@@ -158,17 +158,34 @@ function addAssignment(
 // SELECCIONAR AGENTES PARA UN BLOQUE FIJO
 // =========================================================
 
-function selectAgentsForFixedBlock(agents, quantity) {
+function selectAgentsForFixedBlock(
+  agents,
+  quantity
+) {
   return [...agents]
     .sort((a, b) => {
-      if (a.minutes !== b.minutes) {
-        return a.minutes - b.minutes;
+      /*
+        1. Orden de llegada
+        2. Menor carga como desempate
+      */
+
+      if (
+        a.id !== b.id
+      ) {
+        return a.id - b.id;
       }
 
-      return a.id - b.id;
+      return (
+        a.minutes -
+        b.minutes
+      );
     })
-    .slice(0, quantity);
+    .slice(
+      0,
+      quantity
+    );
 }
+
 function isAgentAvailable(agent, start, end) {
   return !agent.assignments.some((assignment) => {
     const assignmentStart = timeToMinutes(
@@ -193,29 +210,23 @@ function isAgentAvailable(agent, start, end) {
 // ASIGNAR INTERVALO DE UNA SOLA CASILLA
 // =========================================================
 
-function getNextDemand(demand, currentTime) {
-  return [...demand]
+function selectReservedAgents(
+  agents,
+  demand,
+  currentTime
+) {
+  const nextDemand = [...demand]
     .filter(
       (item) =>
-        timeToMinutes(item.start) > currentTime
+        timeToMinutes(item.start) >
+          currentTime &&
+        item.booths >= 2
     )
     .sort(
       (a, b) =>
         timeToMinutes(a.start) -
         timeToMinutes(b.start)
     )[0];
-}
-
-function selectReservedAgents(
-  agents,
-  demand,
-  currentTime
-) {
-  const nextDemand =
-    getNextDemand(
-      demand,
-      currentTime
-    );
 
   if (!nextDemand) {
     return [];
@@ -230,25 +241,8 @@ function selectReservedAgents(
     nextStart -
     TRAVEL_TIME;
 
-  /*
-    Si ya llegamos al momento de traslado,
-    la reserva ya está activa.
-  */
-
-  if (
-    currentTime >=
-    releaseDeadline
-  ) {
-    return [];
-  }
-
   const required =
     nextDemand.booths;
-
-  /*
-    Solo consideramos agentes que pueden
-    llegar a tiempo.
-  */
 
   const candidates =
     agents
@@ -257,15 +251,10 @@ function selectReservedAgents(
           agent.availableAt <=
           releaseDeadline
       )
-      .sort((a, b) => {
-        /*
-          FIFO
-        */
-        return (
-          a.id -
-          b.id
-        );
-      });
+      .sort(
+        (a, b) =>
+          a.id - b.id
+      );
 
   return candidates.slice(
     0,
@@ -304,15 +293,22 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      PRÓXIMA DEMANDA
+      PRÓXIMA DEMANDA DE MÚLTIPLES CASILLAS
       --------------------------------------------------
     */
 
-    const nextDemand =
-      getNextDemand(
-        demand,
-        currentStart
-      );
+    const nextDemand = [...demand]
+      .filter(
+        (item) =>
+          timeToMinutes(item.start) >
+            currentStart &&
+          item.booths >= 2
+      )
+      .sort(
+        (a, b) =>
+          timeToMinutes(a.start) -
+          timeToMinutes(b.start)
+      )[0];
 
     let releaseDeadline = Infinity;
 
@@ -329,7 +325,7 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      AGENTES QUE NECESITAMOS RESERVAR
+      AGENTES RESERVADOS
       --------------------------------------------------
     */
 
@@ -342,96 +338,102 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      DEFINIR EL LÍMITE DEL TRAMO ACTUAL
+      DEFINIR SI ESTAMOS ANTES O DESPUÉS
+      DEL DEADLINE
       --------------------------------------------------
+    */
 
-      Si existe una próxima demanda, tenemos
-      dos momentos importantes:
+    const beforeDeadline =
+      currentStart <
+      releaseDeadline;
 
-          04:30 → deadline
-          05:00 → próxima demanda
-
-      No queremos atravesar ninguno de esos
-      eventos sin volver a calcular.
+    /*
+      --------------------------------------------------
+      DEFINIR EL FINAL DEL SEGMENTO
+      --------------------------------------------------
     */
 
     let segmentEnd = end;
 
     if (
-      releaseDeadline !== Infinity &&
-      releaseDeadline > currentStart
+      beforeDeadline &&
+      releaseDeadline < end
     ) {
       segmentEnd =
-        Math.min(
-          segmentEnd,
-          releaseDeadline
+        releaseDeadline;
+    }
+
+    const currentEnd =
+      segmentEnd;
+
+    if (
+      currentEnd <= currentStart
+    ) {
+      break;
+    }
+
+    /*
+      --------------------------------------------------
+      SELECCIONAR CANDIDATOS
+      --------------------------------------------------
+
+      ANTES del deadline:
+
+        solamente agentes reservados.
+
+      DESPUÉS del deadline:
+
+        solamente agentes NO reservados.
+    */
+
+    let candidateAgents;
+
+    if (beforeDeadline) {
+      candidateAgents =
+        agents.filter(
+          (agent) =>
+            reservedAgents.includes(
+              agent
+            )
+        );
+    } else {
+      candidateAgents =
+        agents.filter(
+          (agent) =>
+            !reservedAgents.includes(
+              agent
+            )
         );
     }
 
     /*
       --------------------------------------------------
-      AGENTES DISPONIBLES
+      FILTRAR DISPONIBILIDAD
       --------------------------------------------------
     */
 
-    const currentEnd = segmentEnd;
-
-    const candidates =
-      agents
-        .filter((agent) =>
-          isAgentAvailable(
-            agent,
-            currentStart,
-            currentEnd
-          )
-        )
-        .map((agent) => ({
-          agent,
-          reserved:
-            reservedAgents.includes(
-              agent
-            ),
-          remaining:
-            getRemainingNeed(
-              agent,
-              agents,
-              totalWork
-            ),
-        }))
-        .filter((candidate) => {
-          /*
-            Si ya estamos en el deadline,
-            los agentes reservados no pueden
-            seguir trabajando.
-          */
-
-          if (
-            candidate.reserved &&
-            currentStart >=
-              releaseDeadline
-          ) {
-            return false;
-          }
-
-          return true;
-        });
+    candidateAgents =
+      candidateAgents.filter(
+        (agent) =>
+          agent.availableAt <=
+          currentStart
+      );
 
     if (
-      candidates.length === 0
+      candidateAgents.length === 0
     ) {
       /*
-        No hay nadie que pueda trabajar
-        en este momento.
-
-        Avanzamos hasta el próximo evento.
+        No hay agentes disponibles.
       */
 
       if (
         releaseDeadline !== Infinity &&
-        currentStart < releaseDeadline
+        currentStart <
+          releaseDeadline
       ) {
         current =
           releaseDeadline;
+
         continue;
       }
 
@@ -440,96 +442,71 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      ORDEN DE PRIORIDAD
+      ORDEN FIFO
       --------------------------------------------------
-
-      1. FIFO
-      2. Mayor necesidad de minutos
-      3. ID
     */
 
-    candidates.sort((a, b) => {
-      if (
-        a.agent.id !==
-        b.agent.id
-      ) {
+    candidateAgents.sort(
+      (a, b) => {
+        /*
+          Primero orden de llegada.
+        */
+
+        if (
+          a.id !== b.id
+        ) {
+          return (
+            a.id - b.id
+          );
+        }
+
+        /*
+          Luego menor carga.
+        */
+
         return (
-          a.agent.id -
-          b.agent.id
+          a.minutes -
+          b.minutes
         );
       }
-
-      if (
-        a.remaining !==
-        b.remaining
-      ) {
-        return (
-          b.remaining -
-          a.remaining
-        );
-      }
-
-      return (
-        a.agent.id -
-        b.agent.id
-      );
-    });
+    );
 
     /*
       --------------------------------------------------
       CALCULAR DURACIÓN
       --------------------------------------------------
-
-      NO queremos darle automáticamente
-      todo el segmento al primer agente.
-
-      Calculamos cuántos agentes pueden
-      participar en este tramo.
     */
-
-    const availableCandidates =
-      candidates.length;
 
     const remainingTime =
       currentEnd -
       currentStart;
 
     /*
-      Dividimos el tiempo disponible entre
-      los agentes que pueden participar.
+      Si tenemos varios agentes reservados,
+      dividimos el tramo entre ellos.
 
       Ejemplo:
 
-          03:30 → 04:30
-          2 agentes
+        03:30 → 04:30
+        2 agentes
 
-          60 / 2 = 30 min
-
-      Resultado:
-
-          Pedro 30
-          Juan 30
+        60 / 2 = 30
     */
+
+    const agentCount =
+      candidateAgents.length;
 
     let duration =
       Math.floor(
         remainingTime /
-        availableCandidates
+        agentCount
       );
-
-    /*
-      Nunca menos de 1 minuto.
-    */
 
     duration =
       Math.max(
         1,
         duration
       );
-
-    /*
-      No superar el intervalo.
-    */
 
     duration =
       Math.min(
@@ -541,25 +518,38 @@ function assignFlexibleInterval(
       --------------------------------------------------
       SELECCIONAR AGENTE
       --------------------------------------------------
+
+      FIFO.
     */
 
     const selected =
-      candidates[0];
+      candidateAgents[0];
 
     /*
-      Si al agente le faltan menos minutos
-      que la duración calculada, no le damos
-      más de lo que necesita.
+      --------------------------------------------------
+      LIMITAR SEGÚN OBJETIVO
+      --------------------------------------------------
     */
 
+    const remainingNeed =
+      getRemainingNeed(
+        selected,
+        agents,
+        totalWork
+      );
+
     if (
-      selected.remaining > 0
+      remainingNeed > 0
     ) {
       duration =
         Math.min(
           duration,
-          selected.remaining
+          remainingNeed
         );
+    }
+
+    if (duration <= 0) {
+      break;
     }
 
     /*
@@ -568,21 +558,17 @@ function assignFlexibleInterval(
       --------------------------------------------------
     */
 
-    if (duration <= 0) {
-      break;
-    }
-
     addAssignment(
-      selected.agent,
+      selected,
       currentStart,
       currentStart + duration,
       1
     );
 
-    selected.agent.minutes +=
+    selected.minutes +=
       duration;
 
-    selected.agent.availableAt =
+    selected.availableAt =
       currentStart +
       duration;
 
