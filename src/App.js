@@ -18,6 +18,7 @@ const INITIAL_DEMAND = [
 // =========================================================
 // UTILIDADES
 // =========================================================
+const TRAVEL_TIME = 30;
 
 function timeToMinutes(time) {
   const [hours, minutes] = time.split(":").map(Number);
@@ -123,7 +124,6 @@ function calculateTotalWork(demand) {
 // =========================================================
 // AGREGAR ASIGNACIÓN
 // =========================================================
-
 function addAssignment(
   agent,
   start,
@@ -134,11 +134,6 @@ function addAssignment(
     agent.assignments[
       agent.assignments.length - 1
     ];
-
-  /*
-    Si el nuevo turno es inmediatamente posterior
-    y pertenece a la misma casilla, lo unimos.
-  */
 
   if (
     last &&
@@ -158,6 +153,42 @@ function addAssignment(
   });
 }
 
+/*
+function addAssignment(
+  agent,
+  start,
+  end,
+  booth
+) {
+  const last =
+    agent.assignments[
+      agent.assignments.length - 1
+    ];
+
+  
+    Si el nuevo turno es inmediatamente posterior
+    y pertenece a la misma casilla, lo unimos.
+  
+
+  if (
+    last &&
+    last.end === start &&
+    last.booth === booth
+  ) {
+    last.end = end;
+    last.minutes += end - start;
+    return;
+  }
+
+  agent.assignments.push({
+    start,
+    end,
+    booth,
+    minutes: end - start,
+  });
+}
+*/
+
 // =========================================================
 // SELECCIONAR AGENTES PARA UN BLOQUE FIJO
 // =========================================================
@@ -167,7 +198,23 @@ function selectAgentsForFixedBlock(
   quantity,
   duration
 ) {
-  /*
+  return [...agents]
+    .sort((a, b) => {
+      if (a.minutes !== b.minutes) {
+        return a.minutes - b.minutes;
+      }
+
+      return a.id - b.id;
+    })
+    .slice(0, quantity);
+}
+/*
+function selectAgentsForFixedBlock(
+  agents,
+  quantity,
+  duration
+) {
+  
     Para una demanda de 2 o más casillas:
 
         00:00 → 01:00
@@ -178,7 +225,7 @@ function selectAgentsForFixedBlock(
     La prioridad es:
     1. Menor cantidad de minutos acumulados.
     2. ID como desempate estable.
-  */
+  
 
   return [...agents]
     .sort((a, b) => {
@@ -190,6 +237,7 @@ function selectAgentsForFixedBlock(
     })
     .slice(0, quantity);
 }
+*/
 
 // =========================================================
 // CALCULAR OBJETIVOS FINALES
@@ -201,6 +249,29 @@ function calculateFinalTargets(
   totalWork
 ) {
   /*
+    El objetivo ya no se utiliza para forzar una
+    distribución exacta.
+
+    Se mantiene como referencia para el balance final,
+    pero las necesidades operativas futuras tienen
+    prioridad.
+  */
+
+  const target =
+    totalWork / agents.length;
+
+  return agents.map((agent) => ({
+    id: agent.id,
+    target,
+  }));
+}
+/*
+function calculateFinalTargets(
+  agents,
+  flexibleMinutes,
+  totalWork
+) {
+  
     Tenemos las horas que ya fueron asignadas por
     bloques fijos.
 
@@ -223,7 +294,7 @@ function calculateFinalTargets(
     Resultado:
 
         todos = 96
-  */
+  
 
   const targets = agents.map((agent) => ({
     id: agent.id,
@@ -247,11 +318,420 @@ function calculateFinalTargets(
 
   return targets;
 }
+*/
 
 // =========================================================
 // ASIGNAR INTERVALO DE UNA SOLA CASILLA
 // =========================================================
 
+function getNextDemand(
+  demand,
+  currentTime
+) {
+  return demand
+    .filter(
+      (item) =>
+        timeToMinutes(item.start) > currentTime
+    )
+    .sort(
+      (a, b) =>
+        timeToMinutes(a.start) -
+        timeToMinutes(b.start)
+    )[0];
+}
+
+function getRequiredAgentsAt(
+  demand,
+  time
+) {
+  return demand
+    .filter((item) => {
+      const start = timeToMinutes(item.start);
+      const end = timeToMinutes(item.end);
+
+      return (
+        start <= time &&
+        time < end
+      );
+    })
+    .reduce(
+      (total, item) =>
+        total + item.booths,
+      0
+    );
+}
+
+
+function getAgentsNeededForNextDemand(
+  agents,
+  demand,
+  currentTime
+) {
+  const nextDemand =
+    getNextDemand(
+      demand,
+      currentTime
+    );
+
+  if (!nextDemand) {
+    return [];
+  }
+
+  const nextStart =
+    timeToMinutes(
+      nextDemand.start
+    );
+
+  /*
+    Los agentes que deben quedar libres antes
+    de la próxima apertura.
+
+    Ejemplo:
+
+      ahora = 03:30
+      próxima apertura = 05:00
+      TRAVEL_TIME = 30
+
+    Los agentes necesarios deben quedar
+    disponibles como máximo a las 04:30.
+  */
+
+  const releaseDeadline =
+    nextStart - TRAVEL_TIME;
+
+  const required =
+    nextDemand.booths;
+
+  const currentlyFree =
+    agents.filter(
+      (agent) =>
+        agent.availableAt <=
+        releaseDeadline
+    );
+
+  if (
+    currentlyFree.length >= required
+  ) {
+    return [];
+  }
+
+  const missing =
+    required -
+    currentlyFree.length;
+
+  return [...agents]
+    .filter(
+      (agent) =>
+        !currentlyFree.includes(agent)
+    )
+    .sort((a, b) => {
+      /*
+        Primero liberamos a los agentes
+        con mayor carga.
+
+        Así preservamos a los agentes
+        con menos minutos para el equilibrio.
+      */
+
+      if (a.minutes !== b.minutes) {
+        return b.minutes - a.minutes;
+      }
+
+      return a.id - b.id;
+    })
+    .slice(0, missing);
+}
+
+
+function calculateTransitionPenalty(
+  agent,
+  currentTime,
+  demand
+) {
+  const nextDemand =
+    getNextDemand(
+      demand,
+      currentTime
+    );
+
+  if (!nextDemand) {
+    return 0;
+  }
+
+  const nextStart =
+    timeToMinutes(
+      nextDemand.start
+    );
+
+  const timeUntilNext =
+    nextStart - currentTime;
+
+  /*
+    Si estamos cerca de una apertura futura,
+    penalizamos utilizar agentes que necesitaremos
+    para esa apertura.
+  */
+
+  if (
+    timeUntilNext <=
+    TRAVEL_TIME
+  ) {
+    return 100000;
+  }
+
+  if (
+    timeUntilNext <=
+    TRAVEL_TIME * 2
+  ) {
+    return 1000;
+  }
+
+  return 0;
+}
+
+function assignFlexibleInterval(
+  agents,
+  interval,
+  targets,
+  demand
+) {
+  let current =
+    timeToMinutes(
+      interval.start
+    );
+
+  const end =
+    timeToMinutes(
+      interval.end
+    );
+
+  while (current < end) {
+    const remainingInterval =
+      end - current;
+
+    /*
+      Detectamos qué agentes necesitamos
+      liberar para la próxima apertura.
+    */
+
+    const agentsToRelease =
+      getAgentsNeededForNextDemand(
+        agents,
+        demand,
+        current
+      );
+
+    const candidates =
+      agents
+        .map((agent) => {
+          const target =
+            targets.find(
+              (item) =>
+                item.id === agent.id
+            ).target;
+
+          const remaining =
+            target -
+            agent.minutes;
+
+          const transitionPenalty =
+            agentsToRelease.includes(agent)
+              ? 100000
+              : calculateTransitionPenalty(
+                  agent,
+                  current,
+                  demand
+                );
+
+          const last =
+            agent.assignments[
+              agent.assignments.length - 1
+            ];
+
+          const continuity =
+            last &&
+            last.end === current
+              ? 1
+              : 0;
+
+          return {
+            agent,
+            remaining,
+            continuity,
+            transitionPenalty,
+          };
+        })
+        .sort((a, b) => {
+          /*
+            PRIORIDAD 1:
+            No utilizar agentes que necesitamos
+            liberar para la próxima apertura.
+          */
+
+          if (
+            a.transitionPenalty !==
+            b.transitionPenalty
+          ) {
+            return (
+              a.transitionPenalty -
+              b.transitionPenalty
+            );
+          }
+
+          /*
+            PRIORIDAD 2:
+            Continuidad de la casilla.
+          */
+
+          if (
+            a.continuity !==
+            b.continuity
+          ) {
+            return (
+              b.continuity -
+              a.continuity
+            );
+          }
+
+          /*
+            PRIORIDAD 3:
+            Balance de carga.
+          */
+
+          if (
+            a.remaining !==
+            b.remaining
+          ) {
+            return (
+              b.remaining -
+              a.remaining
+            );
+          }
+
+          return (
+            a.agent.id -
+            b.agent.id
+          );
+        });
+
+    let selected =
+      candidates[0];
+
+    if (!selected) {
+      break;
+    }
+
+    /*
+      Si el agente seleccionado tiene que
+      quedar libre para la próxima apertura,
+      buscamos otro agente.
+
+      Esto permite que aparezca un relevo.
+    */
+
+    if (
+      agentsToRelease.includes(
+        selected.agent
+      )
+    ) {
+      const alternative =
+        candidates.find(
+          (candidate) =>
+            !agentsToRelease.includes(
+              candidate.agent
+            )
+        );
+
+      if (alternative) {
+        selected = alternative;
+      }
+    }
+
+    if (!selected) {
+      break;
+    }
+
+    let duration;
+
+    /*
+      Calculamos cuánto tiempo puede continuar
+      este agente antes de que necesitemos
+      liberar a los agentes destinados a la
+      siguiente apertura.
+    */
+
+    const nextDemand =
+      getNextDemand(
+        demand,
+        current
+      );
+
+    let maximumUntilTransition =
+      remainingInterval;
+
+    if (nextDemand) {
+      const nextStart =
+        timeToMinutes(
+          nextDemand.start
+        );
+
+      const releaseDeadline =
+        nextStart -
+        TRAVEL_TIME;
+
+      maximumUntilTransition =
+        Math.max(
+          0,
+          releaseDeadline -
+            current
+        );
+    }
+
+    /*
+      Evitamos que una sola persona absorba
+      todo el intervalo si necesitamos preparar
+      la siguiente apertura.
+    */
+
+    duration = Math.min(
+      remainingInterval,
+      maximumUntilTransition
+    );
+
+    /*
+      Si ya estamos dentro de la ventana
+      de transición, usamos un tramo corto
+      para forzar el relevo.
+    */
+
+    if (duration <= 0) {
+      duration = Math.min(
+        remainingInterval,
+        30
+      );
+    }
+
+    if (duration <= 0) {
+      break;
+    }
+
+    addAssignment(
+      selected.agent,
+      current,
+      current + duration,
+      1
+    );
+
+    selected.agent.minutes +=
+      duration;
+
+    selected.agent.availableAt =
+      current + duration;
+
+    current += duration;
+  }
+}
+/*
 function assignFlexibleInterval(
   agents,
   interval,
@@ -260,7 +740,7 @@ function assignFlexibleInterval(
   let current = timeToMinutes(interval.start);
   const end = timeToMinutes(interval.end);
 
-  /*
+  
     Esta función trabaja en minutos reales.
 
     NO utiliza slots de 5 minutos.
@@ -271,15 +751,15 @@ function assignFlexibleInterval(
         01:48 → 02:36
 
     etc.
-  */
+  
 
   while (current < end) {
     const remainingInterval = end - current;
 
-    /*
+    
       Cuánto le falta a cada agente para llegar
       a su objetivo.
-    */
+    
     const currentTime = current;
     
     const candidates = agents
@@ -297,18 +777,18 @@ function assignFlexibleInterval(
         };
       })
       .sort((a, b) => {
-        /*
+        
           Primero el que más necesita minutos.
-        */
+        
 
         if (a.remaining !== b.remaining) {
           return b.remaining - a.remaining;
         }
 
-        /*
+        
           Si están empatados, preferimos continuar
           con el mismo agente si estaba trabajando.
-        */
+        
 
         const aLast =
           a.agent.assignments[
@@ -339,10 +819,10 @@ function assignFlexibleInterval(
       break;
     }
 
-    /*
+    
       Si todos ya llegaron al objetivo, buscamos al que
       tenga menor carga para absorber el sobrante.
-    */
+    
 
     let duration;
 
@@ -377,11 +857,213 @@ function assignFlexibleInterval(
     current += duration;
   }
 }
+*/
 
 // =========================================================
 // GENERADOR PRINCIPAL
 // =========================================================
 
+function generateSchedule(
+  agentsInput,
+  demand
+) {
+  const error =
+    validateDemand(
+      agentsInput,
+      demand
+    );
+
+  if (error) {
+    return {
+      error,
+      schedule: [],
+      stats: null,
+    };
+  }
+
+  const agents =
+    agentsInput.map(
+      (agent) => ({
+        ...agent,
+        minutes: 0,
+        assignments: [],
+        availableAt: 0,
+      })
+    );
+
+  const sortedDemand =
+    [...demand].sort(
+      (a, b) =>
+        timeToMinutes(
+          a.start
+        ) -
+        timeToMinutes(
+          b.start
+        )
+    );
+
+  const totalWork =
+    calculateTotalWork(
+      sortedDemand
+    );
+
+  /*
+    -----------------------------------------------------
+    PASO 1
+    BLOQUES DE MÚLTIPLES CASILLAS
+    -----------------------------------------------------
+  */
+
+  const fixedIntervals =
+    sortedDemand.filter(
+      (item) =>
+        item.booths >= 2
+    );
+
+  for (
+    const interval
+    of fixedIntervals
+  ) {
+    const start =
+      timeToMinutes(
+        interval.start
+      );
+
+    const end =
+      timeToMinutes(
+        interval.end
+      );
+
+    const selected =
+      selectAgentsForFixedBlock(
+        agents,
+        interval.booths,
+        end - start
+      );
+
+    selected.forEach(
+      (agent, index) => {
+        addAssignment(
+          agent,
+          start,
+          end,
+          index + 1
+        );
+
+        agent.minutes +=
+          end - start;
+
+        agent.availableAt =
+          end;
+      }
+    );
+  }
+
+  /*
+    -----------------------------------------------------
+    PASO 2
+    INTERVALOS FLEXIBLES
+    -----------------------------------------------------
+  */
+
+  const flexibleIntervals =
+    sortedDemand.filter(
+      (item) =>
+        item.booths === 1
+    );
+
+  const flexibleMinutes =
+    flexibleIntervals.reduce(
+      (
+        total,
+        interval
+      ) => {
+        return (
+          total +
+          timeToMinutes(
+            interval.end
+          ) -
+          timeToMinutes(
+            interval.start
+          )
+        );
+      },
+      0
+    );
+
+  /*
+    -----------------------------------------------------
+    PASO 3
+    OBJETIVOS DE CARGA
+    -----------------------------------------------------
+  */
+
+  const targets =
+    calculateFinalTargets(
+      agents,
+      flexibleMinutes,
+      totalWork
+    );
+
+  /*
+    -----------------------------------------------------
+    PASO 4
+    ASIGNACIÓN CON LOOK-AHEAD
+    -----------------------------------------------------
+  */
+
+  for (
+    const interval
+    of flexibleIntervals
+  ) {
+    assignFlexibleInterval(
+      agents,
+      interval,
+      targets,
+      sortedDemand
+    );
+  }
+
+  /*
+    -----------------------------------------------------
+    RESULTADO
+    -----------------------------------------------------
+  */
+
+  const loads =
+    agents.map(
+      (agent) =>
+        agent.minutes
+    );
+
+  const minMinutes =
+    Math.min(...loads);
+
+  const maxMinutes =
+    Math.max(...loads);
+
+  const target =
+    totalWork /
+    agents.length;
+
+  return {
+    error: null,
+
+    schedule: agents,
+
+    stats: {
+      totalWork,
+      target,
+      minMinutes,
+      maxMinutes,
+      difference:
+        maxMinutes -
+        minMinutes,
+    },
+  };
+}
+
+/*
 function generateSchedule(
   agentsInput,
   demand
@@ -414,7 +1096,7 @@ function generateSchedule(
   const totalWork =
     calculateTotalWork(sortedDemand);
 
-  /*
+  
     -----------------------------------------------------
     PASO 1
     -----------------------------------------------------
@@ -427,7 +1109,7 @@ function generateSchedule(
         05–06 → 3
 
     Estos bloques NO se dividen.
-  */
+  
 
   const fixedIntervals = sortedDemand.filter(
     (item) => item.booths >= 2
@@ -461,14 +1143,14 @@ function generateSchedule(
     });
   }
 
-  /*
+  
     -----------------------------------------------------
     PASO 2
     -----------------------------------------------------
 
     Calculamos cuánto tiempo queda en intervalos
     de una sola casilla.
-  */
+  
 
   const flexibleIntervals =
     sortedDemand.filter(
@@ -487,7 +1169,7 @@ function generateSchedule(
       0
     );
 
-  /*
+  
     -----------------------------------------------------
     PASO 3
     -----------------------------------------------------
@@ -496,7 +1178,7 @@ function generateSchedule(
 
     Esto tiene en cuenta los bloques fijos que ya
     asignamos.
-  */
+  
 
   const targets = calculateFinalTargets(
     agents,
@@ -504,7 +1186,7 @@ function generateSchedule(
     totalWork
   );
 
-  /*
+  
     -----------------------------------------------------
     PASO 4
     -----------------------------------------------------
@@ -518,7 +1200,7 @@ function generateSchedule(
         36 min
         17 min
         etc.
-  */
+  
 
   for (const interval of flexibleIntervals) {
     assignFlexibleInterval(
@@ -528,11 +1210,11 @@ function generateSchedule(
     );
   }
 
-  /*
+  
     -----------------------------------------------------
     RESULTADO
     -----------------------------------------------------
-  */
+  
 
   const loads = agents.map(
     (agent) => agent.minutes
@@ -559,6 +1241,7 @@ function generateSchedule(
     },
   };
 }
+*/
 
 // =========================================================
 // COMPONENTE REACT
