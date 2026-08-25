@@ -584,45 +584,6 @@ function assignFlexibleInterval(
       tiempo.
     */
 
-    const candidates =
-      agents
-        .map((agent) => {
-          const target =
-            targets.get(
-              agent.id
-            );
-
-          return {
-            agent,
-            target,
-            remaining:
-              target -
-              agent.minutes,
-          };
-        })
-        .filter(
-          (item) =>
-            item.remaining > 0
-        )
-        .sort(
-          (a, b) => {
-            if (
-              a.remaining !==
-              b.remaining
-            ) {
-              return (
-                b.remaining -
-                a.remaining
-              );
-            }
-
-            return (
-              a.agent.id -
-              b.agent.id
-            );
-          }
-        );
-
     /*
       Si hay alguien que ya estaba trabajando
       exactamente hasta este momento y todavía
