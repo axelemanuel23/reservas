@@ -194,25 +194,6 @@ function getAgentTargets(agents, totalWork) {
   );
 }
 
-function getAgentTargets(agents, totalWork) {
-  const baseTarget = Math.floor(
-    totalWork / agents.length
-  );
-
-  const remainder =
-    totalWork % agents.length;
-
-  return agents.reduce(
-    (targets, agent, index) => {
-      targets[agent.id] =
-        baseTarget +
-        (index < remainder ? 1 : 0);
-
-      return targets;
-    },
-    {}
-  );
-}
 function getFutureCommittedMinutes(
   agent,
   demand,
