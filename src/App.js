@@ -419,11 +419,15 @@ function assignFlexibleInterval(
           Marcos 04:30 → 05:00
     */
 
-    let candidates =
-      agents.filter(
-        (agent) =>
-          agent.availableAt <= current
-      );
+    let candidates = [];
+
+for (const agent of agents) {
+  if (
+    agent.availableAt <= current
+  ) {
+    candidates.push(agent);
+  }
+}
 
     /*
       --------------------------------------------------
