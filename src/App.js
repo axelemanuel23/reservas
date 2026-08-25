@@ -186,26 +186,6 @@ function selectAgentsForFixedBlock(
     );
 }
 
-function isAgentAvailable(agent, start, end) {
-  return !agent.assignments.some((assignment) => {
-    const assignmentStart = timeToMinutes(
-      assignment.start
-    );
-
-    const assignmentEnd = timeToMinutes(
-      assignment.end
-    );
-
-    return (
-      start < assignmentEnd &&
-      end > assignmentStart
-    );
-  });
-}
-// =========================================================
-// CALCULAR OBJETIVOS FINALES
-// =========================================================
-
 // =========================================================
 // ASIGNAR INTERVALO DE UNA SOLA CASILLA
 // =========================================================
