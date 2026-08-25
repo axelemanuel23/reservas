@@ -238,25 +238,15 @@ function selectAgentsForFixedBlock(
   fixedMinutes
 ) {
   /*
-    Primero buscamos los agentes que tengan
-    menor carga fija.
+    Los bloques de varias casillas son rígidos:
+    no se pueden dividir.
 
-    Esto es importante porque los bloques de
-    varias casillas NO se pueden dividir.
+    Priorizamos:
+      1. menor carga fija actual
+      2. orden de llegada (ID)
 
-    Ejemplo:
-
-      Juan   60
-      Pedro   0
-      Carlos  0
-      Luis    0
-      Miguel 60
-
-    Si necesitamos 2 agentes:
-
-      Pedro + Luis
-
-    en lugar de volver a cargar a Juan/Miguel.
+    La selección desde los extremos se mantiene
+    para conservar la distribución de casillas.
   */
 
   const sorted = [...agents].sort(
@@ -276,22 +266,7 @@ function selectAgentsForFixedBlock(
   );
 
   /*
-    Tomamos primero la capa de menor carga.
-
-    Si esa capa tiene suficientes agentes,
-    usamos una distribución desde los extremos.
-
-    Ejemplo con:
-
-      1 2 3 4 5
-
-    y 2 casillas:
-
-      1 5
-
-    y 3 casillas:
-
-      1 3 5
+    Tomamos agentes de la capa con menor carga.
   */
 
   const minimumLoad =
@@ -321,7 +296,8 @@ function selectAgentsForFixedBlock(
 
   /*
     Si no alcanza una única capa,
-    completamos desde las siguientes capas.
+    completamos desde las siguientes
+    capas de carga.
   */
 
   const selected = [
@@ -451,7 +427,29 @@ function planFixedIntervals(
       ])
     );
 
+  /*
+    futureFixedMinutes representa minutos
+    obligatorios que el agente todavía
+    tendrá que trabajar en bloques futuros.
+
+    Inicialmente contiene TODOS los bloques
+    rígidos.
+  */
+
+  const futureFixedMinutes =
+    new Map(
+      agents.map((agent) => [
+        agent.id,
+        0,
+      ])
+    );
+
   const fixedPlan = [];
+
+  /*
+    Primero calculamos qué agentes harán
+    cada bloque.
+  */
 
   for (const interval of fixedIntervals) {
     const start =
@@ -464,21 +462,15 @@ function planFixedIntervals(
         interval.end
       );
 
+    const duration =
+      end - start;
+
     const selected =
       selectAgentsForFixedBlock(
         agents,
         interval.booths,
         fixedMinutes
       );
-
-    /*
-      selected ya está ordenado por ID.
-
-      Por lo tanto:
-
-        menor ID → primera casilla
-        mayor ID → última casilla
-    */
 
     selected.forEach(
       (agent, index) => {
@@ -496,8 +488,14 @@ function planFixedIntervals(
           agent.id,
           fixedMinutes.get(
             agent.id
-          ) +
-            (end - start)
+          ) + duration
+        );
+
+        futureFixedMinutes.set(
+          agent.id,
+          futureFixedMinutes.get(
+            agent.id
+          ) + duration
         );
       }
     );
@@ -505,6 +503,7 @@ function planFixedIntervals(
 
   return {
     fixedMinutes,
+    futureFixedMinutes,
     fixedPlan,
   };
 }
@@ -542,6 +541,53 @@ function applyFixedPlan(
   }
 }
 
+function getFutureFixedMinutes(
+  agentId,
+  fixedPlan,
+  currentTime
+) {
+  return fixedPlan
+    .filter(
+      (assignment) =>
+        assignment.agentId ===
+          agentId &&
+        assignment.start >=
+          currentTime
+    )
+    .reduce(
+      (total, assignment) =>
+        total +
+        (
+          assignment.end -
+          assignment.start
+        ),
+      0
+    );
+}
+
+function getFlexibleRemaining(
+  agent,
+  targets,
+  fixedPlan,
+  currentTime
+) {
+  const target =
+    targets.get(agent.id) ?? 0;
+
+  const futureFixed =
+    getFutureFixedMinutes(
+      agent.id,
+      fixedPlan,
+      currentTime
+    );
+
+  return (
+    target -
+    agent.minutes -
+    futureFixed
+  );
+}
+
 // =========================================================
 // ASIGNAR TIEMPO FLEXIBLE
 // =========================================================
@@ -549,7 +595,8 @@ function applyFixedPlan(
 function assignFlexibleInterval(
   agents,
   interval,
-  targets
+  targets,
+  fixedPlan
 ) {
   let current =
     timeToMinutes(
@@ -561,123 +608,125 @@ function assignFlexibleInterval(
       interval.end
     );
 
-  /*
-    La casilla 1 es la única casilla abierta
-    durante este intervalo.
-  */
-
   while (current < end) {
     const remainingInterval =
       end - current;
 
     /*
-      Buscamos primero agentes que todavía
-      estén por debajo de su objetivo.
+      ===================================================
+      1. BUSCAR CONTINUIDAD
+      ===================================================
 
-      El orden principal es:
+      Si un agente ya estaba trabajando
+      exactamente hasta "current" y todavía
+      tiene minutos flexibles disponibles,
+      continúa.
 
-      1. Mayor necesidad.
-      2. Menor ID.
-
-      Pero antes de esto damos continuidad
-      al agente actual si todavía necesita
-      tiempo.
+      Esto tiene prioridad sobre el orden
+      de llegada porque evita cortes artificiales.
     */
 
-    /*
-      Si hay alguien que ya estaba trabajando
-      exactamente hasta este momento y todavía
-      necesita tiempo, le damos continuidad.
+    let continuity = null;
 
-      Esto evita:
+    for (const agent of agents) {
+      const last =
+        agent.assignments[
+          agent.assignments.length - 1
+        ];
 
-        01:00 → 01:01 Juan
-        01:01 → 01:02 Pedro
-        01:02 → 01:03 Juan
+      if (
+        !last ||
+        last.end !== current
+      ) {
+        continue;
+      }
 
-      y produce turnos naturales.
-    */
+      /*
+        No podemos darle más trabajo si
+        ya alcanzó su objetivo considerando
+        sus compromisos futuros.
+      */
 
-    const candidates = agents
-  .map((agent) => {
-    const target = targets.get(agent.id);
+      const remaining =
+  getFlexibleRemaining(
+    agent,
+    targets,
+    fixedPlan,
+    current
+  );
 
-    return {
-      agent,
-      target,
-      remaining: target - agent.minutes,
-    };
-  })
-  .filter(
-    (item) => item.remaining > 0
-  )
-  .sort((a, b) => {
-    /*
-      Primero el que más necesita.
-    */
+      if (remaining > 0) {
+        continuity = {
+          agent,
+          remaining,
+        };
 
-    if (a.remaining !== b.remaining) {
-      return b.remaining - a.remaining;
+        break;
+      }
     }
 
     /*
-      Si necesitan lo mismo, gana
-      el que llegó primero.
+      ===================================================
+      2. SI NO HAY CONTINUIDAD,
+         BUSCAR POR ORDEN DE LLEGADA
+      ===================================================
     */
 
-    return a.agent.id - b.agent.id;
-  });
+    let selected = continuity;
 
-/*
-  Buscamos continuidad sin utilizar
-  una función que capture "current".
-*/
+    if (!selected) {
+      /*
+        IMPORTANTE:
 
-let continuity = null;
+        No ordenamos por "mayor necesidad".
 
-for (const candidate of candidates) {
-  const assignments =
-    candidate.agent.assignments;
+        El orden de llegada es:
 
-  const last =
-    assignments[
-      assignments.length - 1
-    ];
+          ID 1
+          ID 2
+          ID 3
+          ID 4
+          ID 5
 
-  if (
-    last &&
-    last.end === current
-  ) {
-    continuity = candidate;
-    break;
-  }
-}
+        El primer agente elegible gana.
+      */
 
-const selected =
-  continuity ?? candidates[0];
+      for (const agent of agents) {
+        const remaining =
+          getFlexibleRemaining(
+            agent,
+            targets,
+            futureFixedMinutes
+          );
+
+        if (remaining > 0) {
+          selected = {
+            agent,
+            remaining,
+          };
+
+          break;
+        }
+      }
+    }
+
     /*
-      Si todos llegaron al objetivo,
-      todavía puede quedar tiempo debido
-      a bloques obligatorios que hicieron
-      que algunos superaran el objetivo.
+      ===================================================
+      3. SI TODOS ESTÁN COMPLETOS
+      ===================================================
 
-      En ese caso equilibramos empezando
-      por el agente con menor carga.
+      Puede ocurrir cuando los bloques rígidos
+      ya hicieron que algunos agentes alcancen
+      o superen matemáticamente su objetivo.
+
+      En ese caso buscamos el agente con
+      menor carga total.
+
+      Esto es solamente un mecanismo de
+      emergencia para cubrir la demanda.
     */
 
-    let agent;
-    let duration;
-
-    if (selected) {
-      agent =
-        selected.agent;
-
-      duration =
-        Math.min(
-          selected.remaining,
-          remainingInterval
-        );
-    } else {
+    if (!selected) {
       const lowest =
         [...agents].sort(
           (a, b) => {
@@ -695,17 +744,30 @@ const selected =
           }
         )[0];
 
-      agent = lowest;
+      if (!lowest) {
+        break;
+      }
 
-      /*
-        Para no producir demasiados cortes,
-        dejamos que el agente con menor carga
-        absorba el tramo restante.
-      */
-
-      duration =
-        remainingInterval;
+      selected = {
+        agent: lowest,
+        remaining:
+          remainingInterval,
+      };
     }
+
+    const agent =
+      selected.agent;
+
+    /*
+      No podemos superar la capacidad
+      flexible calculada.
+    */
+
+    const duration =
+      Math.min(
+        selected.remaining,
+        remainingInterval
+      );
 
     if (
       !agent ||
@@ -727,7 +789,6 @@ const selected =
     current += duration;
   }
 }
-
 // =========================================================
 // VALIDACIÓN FINAL DEL SCHEDULE
 // =========================================================
@@ -907,13 +968,14 @@ export function generateSchedule(
     );
 
   const {
-    fixedMinutes,
-    fixedPlan,
-  } =
-    planFixedIntervals(
-      agents,
-      fixedIntervals
-    );
+  fixedMinutes,
+  futureFixedMinutes,
+  fixedPlan,
+} =
+  planFixedIntervals(
+    agents,
+    fixedIntervals
+  );
 
   /*
     =====================================================
@@ -929,7 +991,14 @@ export function generateSchedule(
     agents,
     fixedPlan
   );
+  /*
+  Los bloques rígidos ya fueron aplicados
+  al schedule.
 
+  Ahora futureFixedMinutes representa
+  únicamente compromisos que todavía
+  están en el futuro.
+  */
   /*
     =====================================================
     PASO 4
@@ -955,15 +1024,58 @@ export function generateSchedule(
     );
 
   for (
-    const interval
-    of flexibleIntervals
-  ) {
-    assignFlexibleInterval(
-      agents,
-      interval,
-      targets
+  const interval
+  of flexibleIntervals
+) {
+  const currentStart =
+    timeToMinutes(
+      interval.start
     );
+
+  /*
+    Los compromisos cuyo inicio ya ocurrió
+    dejan de ser "futuros".
+
+    Para este scheduler, como los intervalos
+    no se superponen y se procesan en orden,
+    podemos mantener un mapa local.
+  */
+
+  const currentFutureFixed =
+    new Map(
+      futureFixedMinutes
+    );
+
+  for (const fixed of fixedPlan) {
+    if (
+      fixed.start <
+      currentStart
+    ) {
+      currentFutureFixed.set(
+        fixed.agentId,
+        Math.max(
+          0,
+          (
+            currentFutureFixed.get(
+              fixed.agentId
+            ) ?? 0
+          ) -
+            (
+              fixed.end -
+              fixed.start
+            )
+        )
+      );
+    }
   }
+
+  assignFlexibleInterval(
+    agents,
+    interval,
+    targets,
+    fixedPlan
+  );
+}
 
   /*
     =====================================================
