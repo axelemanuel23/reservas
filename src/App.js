@@ -180,23 +180,10 @@ function selectAgentsForFixedBlock(
   quantity
 ) {
   return [...agents]
-    .sort((a, b) => {
-      /*
-        1. Orden de llegada
-        2. Menor carga como desempate
-      */
-
-      if (
-        a.id !== b.id
-      ) {
-        return a.id - b.id;
-      }
-
-      return (
-        a.minutes -
-        b.minutes
-      );
-    })
+    .sort(
+      (a, b) =>
+        a.id - b.id
+    )
     .slice(
       0,
       quantity
@@ -271,6 +258,10 @@ function assignFlexibleInterval(
   const end =
     timeToMinutes(interval.end);
 
+  let rotationIndex = 0;
+
+  let previousCandidateIds = "";
+
   while (current < end) {
     const currentStart = current;
 
@@ -321,8 +312,7 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      DEFINIR SI ESTAMOS ANTES O DESPUÉS
-      DEL DEADLINE
+      ANTES / DESPUÉS DEL DEADLINE
       --------------------------------------------------
     */
 
@@ -332,7 +322,7 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      DEFINIR EL FINAL DEL SEGMENTO
+      FINAL DEL SEGMENTO
       --------------------------------------------------
     */
 
@@ -357,21 +347,18 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      SELECCIONAR CANDIDATOS
+      CANDIDATOS
       --------------------------------------------------
-
-      ANTES del deadline:
-
-        solamente agentes reservados.
-
-      DESPUÉS del deadline:
-
-        solamente agentes NO reservados.
     */
 
     let candidateAgents;
 
     if (beforeDeadline) {
+      /*
+        Antes del traslado trabajan
+        los agentes reservados.
+      */
+
       candidateAgents =
         agents.filter(
           (agent) =>
@@ -380,6 +367,11 @@ function assignFlexibleInterval(
             )
         );
     } else {
+      /*
+        Después del deadline trabajan
+        los que NO están reservados.
+      */
+
       candidateAgents =
         agents.filter(
           (agent) =>
@@ -391,7 +383,7 @@ function assignFlexibleInterval(
 
     /*
       --------------------------------------------------
-      FILTRAR DISPONIBILIDAD
+      DISPONIBILIDAD
       --------------------------------------------------
     */
 
@@ -405,10 +397,6 @@ function assignFlexibleInterval(
     if (
       candidateAgents.length === 0
     ) {
-      /*
-        No hay agentes disponibles.
-      */
-
       if (
         releaseDeadline !== Infinity &&
         currentStart <
@@ -416,6 +404,14 @@ function assignFlexibleInterval(
       ) {
         current =
           releaseDeadline;
+
+        /*
+          Reiniciamos la rotación
+          porque cambió el segmento.
+        */
+
+        rotationIndex = 0;
+        previousCandidateIds = "";
 
         continue;
       }
@@ -430,51 +426,57 @@ function assignFlexibleInterval(
     */
 
     candidateAgents.sort(
-      (a, b) => {
-        /*
-          Primero orden de llegada.
-        */
-
-        if (
-          a.id !== b.id
-        ) {
-          return (
-            a.id - b.id
-          );
-        }
-
-        /*
-          Luego menor carga.
-        */
-
-        return (
-          a.minutes -
-          b.minutes
-        );
-      }
+      (a, b) =>
+        a.id - b.id
     );
 
     /*
       --------------------------------------------------
-      CALCULAR DURACIÓN
+      DETECTAR CAMBIO DE GRUPO
+      --------------------------------------------------
+
+      Ejemplo:
+
+        Juan
+        Pedro
+        Carlos
+
+      cambia a:
+
+        Carlos
+        Luis
+        Miguel
+
+      Reiniciamos la rotación.
+    */
+
+    const candidateIds =
+      candidateAgents
+        .map(
+          (agent) =>
+            agent.id
+        )
+        .join(",");
+
+    if (
+      candidateIds !==
+      previousCandidateIds
+    ) {
+      rotationIndex = 0;
+
+      previousCandidateIds =
+        candidateIds;
+    }
+
+    /*
+      --------------------------------------------------
+      DURACIÓN
       --------------------------------------------------
     */
 
     const remainingTime =
       currentEnd -
       currentStart;
-
-    /*
-      Si tenemos varios agentes reservados,
-      dividimos el tramo entre ellos.
-
-      Ejemplo:
-
-        03:30 → 04:30
-        2 agentes
-
-        60 / 2 = 30
-    */
 
     const agentCount =
       candidateAgents.length;
@@ -501,12 +503,15 @@ function assignFlexibleInterval(
       --------------------------------------------------
       SELECCIONAR AGENTE
       --------------------------------------------------
-
-      FIFO.
     */
 
     const selected =
-      candidateAgents[0];
+      candidateAgents[
+        rotationIndex %
+          candidateAgents.length
+      ];
+
+    rotationIndex++;
 
     /*
       --------------------------------------------------
@@ -532,12 +537,17 @@ function assignFlexibleInterval(
     }
 
     if (duration <= 0) {
-      break;
+      /*
+        Si este agente ya alcanzó
+        su objetivo, avanzamos al siguiente.
+      */
+
+      continue;
     }
 
     /*
       --------------------------------------------------
-      ASIGNAR
+      ASIGNACIÓN
       --------------------------------------------------
     */
 
