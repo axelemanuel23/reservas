@@ -182,10 +182,8 @@ function selectAgentsForFixedBlock(
   agents,
   interval
 ) {
-  /*
-    Primero usamos los agentes que fueron
-    reservados específicamente para este bloque.
-  */
+  const start =
+    timeToMinutes(interval.start);
 
   const reserved =
     agents.filter(
@@ -194,18 +192,12 @@ function selectAgentsForFixedBlock(
         interval.id
     );
 
-  /*
-    Si no alcanza la reserva, completamos
-    con agentes disponibles.
-  */
-
   const available =
     agents
       .filter(
         (agent) =>
           !reserved.includes(agent) &&
-          agent.availableAt <=
-            timeToMinutes(interval.start)
+          agent.availableAt <= start
       )
       .sort(
         (a, b) =>
@@ -792,35 +784,45 @@ for (const interval of sortedDemand) {
     timeToMinutes(interval.end);
 
   if (interval.booths >= 2) {
-    const selected =selectAgentsForFixedBlock(
-        agents,
-        interval
+  const start =
+    timeToMinutes(interval.start);
+
+  const end =
+    timeToMinutes(interval.end);
+
+  const selected =
+    selectAgentsForFixedBlock(
+      agents,
+      interval
+    );
+
+  selected.forEach(
+    (agent, index) => {
+      addAssignment(
+        agent,
+        start,
+        end,
+        index + 1
       );
 
-    selected.forEach(
-      (agent, index) => {
-        addAssignment(
-          agent,
-          start,
-          end,
-          index + 1
-        );
+      agent.minutes +=
+        end - start;
 
-        agent.minutes +=
-          end - start;
+      agent.availableAt =
+        end;
 
-        agent.availableAt =
-          end;
-      }
-    );
-  } else {
-    assignFlexibleInterval(
-      agents,
-      interval,
-      sortedDemand,
-      totalWork
-    );
-  }
+      agent.reservedFor =
+        null;
+    }
+  );
+} else {
+  assignFlexibleInterval(
+    agents,
+    interval,
+    sortedDemand,
+    totalWork
+  );
+}
 }
 
   /*
