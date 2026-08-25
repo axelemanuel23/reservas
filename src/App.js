@@ -637,29 +637,63 @@ function assignFlexibleInterval(
       y produce turnos naturales.
     */
 
-    const continuity =
-      candidates.find(
-        (candidate) => {
-          const assignments =
-            candidate.agent
-              .assignments;
+    const candidates = agents
+  .map((agent) => {
+    const target = targets.get(agent.id);
 
-          const last =
-            assignments[
-              assignments.length - 1
-            ];
+    return {
+      agent,
+      target,
+      remaining: target - agent.minutes,
+    };
+  })
+  .filter(
+    (item) => item.remaining > 0
+  )
+  .sort((a, b) => {
+    /*
+      Primero el que más necesita.
+    */
 
-          return (
-            last &&
-            last.end === current
-          );
-        }
-      );
+    if (a.remaining !== b.remaining) {
+      return b.remaining - a.remaining;
+    }
 
-    const selected =
-      continuity ??
-      candidates[0];
+    /*
+      Si necesitan lo mismo, gana
+      el que llegó primero.
+    */
 
+    return a.agent.id - b.agent.id;
+  });
+
+/*
+  Buscamos continuidad sin utilizar
+  una función que capture "current".
+*/
+
+let continuity = null;
+
+for (const candidate of candidates) {
+  const assignments =
+    candidate.agent.assignments;
+
+  const last =
+    assignments[
+      assignments.length - 1
+    ];
+
+  if (
+    last &&
+    last.end === current
+  ) {
+    continuity = candidate;
+    break;
+  }
+}
+
+const selected =
+  continuity ?? candidates[0];
     /*
       Si todos llegaron al objetivo,
       todavía puede quedar tiempo debido
