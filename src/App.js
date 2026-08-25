@@ -156,27 +156,51 @@ function timeToMinutes(time) {
 }
 
 function minutesToTime(minutes) {
-  const hours = Math.floor(minutes / 60)
+  const safeMinutes = Math.round(minutes);
+
+  const hours = Math.floor(
+    safeMinutes / 60
+  )
     .toString()
     .padStart(2, "0");
 
-  const mins = (minutes % 60)
+  const mins = (
+    safeMinutes % 60
+  )
     .toString()
     .padStart(2, "0");
 
   return `${hours}:${mins}`;
 }
 
+
+function getAgentTargets(agents, totalWork) {
+  const baseTarget = Math.floor(
+    totalWork / agents.length
+  );
+
+  const remainder =
+    totalWork % agents.length;
+
+  return agents.reduce(
+    (targets, agent, index) => {
+      targets[agent.id] =
+        baseTarget +
+        (index < remainder ? 1 : 0);
+
+      return targets;
+    },
+    {}
+  );
+}
+
 function getRemainingNeed(
   agent,
-  agents,
-  totalWork
+  targets
 ) {
-  const target =
-    totalWork / agents.length;
-
-  return target - agent.minutes;
+  return targets[agent.id] - agent.minutes;
 }
+
 
 function selectAgentsForFixedBlock(
   agents,
@@ -336,7 +360,7 @@ function assignFlexibleInterval(
   agents,
   interval,
   demand,
-  totalWork
+  targets
 ) {
   let current =
     timeToMinutes(interval.start);
@@ -591,8 +615,7 @@ for (const agent of agents) {
     const remainingNeed =
       getRemainingNeed(
         selected,
-        agents,
-        totalWork
+        targets
       );
 
     if (
@@ -618,8 +641,7 @@ for (const agent of agents) {
           (agent) =>
             getRemainingNeed(
               agent,
-              agents,
-              totalWork
+              targets
             ) > 0
         );
 
@@ -656,8 +678,7 @@ for (const agent of agents) {
         const alternativeNeed =
           getRemainingNeed(
             alternative,
-            agents,
-            totalWork
+            targets
           );
 
         duration =
@@ -755,6 +776,13 @@ function generateSchedule(
 
   const totalWork =
     calculateTotalWork(sortedDemand);
+  
+  const targets =
+  getAgentTargets(
+    agents,
+    totalWork
+  );
+
 
   /*
     -----------------------------------------------------
@@ -806,7 +834,7 @@ for (const interval of sortedDemand) {
       agents,
       interval,
       sortedDemand,
-      totalWork
+      targets
     );
   }
 }
