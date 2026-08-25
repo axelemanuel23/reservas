@@ -20,23 +20,6 @@ const INITIAL_DEMAND = [
 // =========================================================
 const TRAVEL_TIME = 30;
 
-function timeToMinutes(time) {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function minutesToTime(minutes) {
-  const hours = Math.floor(minutes / 60)
-    .toString()
-    .padStart(2, "0");
-
-  const mins = (minutes % 60)
-    .toString()
-    .padStart(2, "0");
-
-  return `${hours}:${mins}`;
-}
-
 function formatMinutes(minutes) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
@@ -158,6 +141,40 @@ function addAssignment(
 // SELECCIONAR AGENTES PARA UN BLOQUE FIJO
 // =========================================================
 
+function timeToMinutes(time) {
+  const [hours, minutes] =
+    time.split(":").map(Number);
+
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(minutes) {
+  const hours = Math.floor(minutes / 60)
+    .toString()
+    .padStart(2, "0");
+
+  const mins = (minutes % 60)
+    .toString()
+    .padStart(2, "0");
+
+  return `${hours}:${mins}`;
+}
+
+function getRemainingNeed(
+  agent,
+  agents,
+  totalWork
+) {
+  const target =
+    totalWork / agents.length;
+
+  return Math.max(
+    0,
+    target - agent.minutes
+  );
+}
+
+
 function selectAgentsForFixedBlock(
   agents,
   quantity
@@ -239,20 +256,6 @@ function selectReservedAgents(
   return candidates.slice(
     0,
     required
-  );
-}
-
-function getRemainingNeed(
-  agent,
-  agents,
-  totalWork
-) {
-  const target =
-    totalWork / agents.length;
-
-  return Math.max(
-    0,
-    target - agent.minutes
   );
 }
 
