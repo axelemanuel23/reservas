@@ -164,30 +164,10 @@ function addAssignment(
 
 function selectAgentsForFixedBlock(
   agents,
-  quantity,
-  duration
+  quantity
 ) {
-  /*
-    Para una demanda de 2 o más casillas:
-
-        00:00 → 01:00
-        2 casillas
-
-    elegimos 2 agentes y ambos hacen la hora completa.
-
-    La prioridad es:
-    1. Menor cantidad de minutos acumulados.
-    2. ID como desempate estable.
-  */
-
   return [...agents]
-    .sort((a, b) => {
-      if (a.minutes !== b.minutes) {
-        return a.minutes - b.minutes;
-      }
-
-      return a.id - b.id;
-    })
+    .sort((a, b) => a.id - b.id)
     .slice(0, quantity);
 }
 
@@ -304,11 +284,8 @@ function assignFlexibleInterval(
         if (a.remaining !== b.remaining) {
           return b.remaining - a.remaining;
         }
-
-        /*
-          Si están empatados, preferimos continuar
-          con el mismo agente si estaba trabajando.
-        */
+        
+        return a.agent.id - b.agent.id;
 
         const aLast =
           a.agent.assignments[
@@ -352,9 +329,12 @@ function assignFlexibleInterval(
         remainingInterval
       );
     } else {
-      const lowest = [...agents].sort(
-        (a, b) => a.minutes - b.minutes
-      )[0];
+      const lowest = [...agents].sort((a, b) => {
+        if (a.minutes !== b.minutes) {
+          return a.minutes - b.minutes;
+        }
+      return a.id - b.id;
+    })[0];
 
       selected.agent = lowest;
 
@@ -445,18 +425,17 @@ function generateSchedule(
     const selected =
       selectAgentsForFixedBlock(
         agents,
-        interval.booths,
-        end - start
+        interval.booths
       );
 
     selected.forEach((agent, index) => {
+      const booth = index + 1;
       addAssignment(
         agent,
         start,
         end,
-        index + 1
+        booth
       );
-
       agent.minutes += end - start;
     });
   }
