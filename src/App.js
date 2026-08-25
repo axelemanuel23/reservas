@@ -180,18 +180,47 @@ function getRemainingNeed(
 
 function selectAgentsForFixedBlock(
   agents,
-  quantity
+  interval
 ) {
-  return [...agents]
-    .sort(
-      (a, b) =>
-        a.id - b.id
-    )
-    .slice(
-      0,
-      quantity
+  /*
+    Primero usamos los agentes que fueron
+    reservados específicamente para este bloque.
+  */
+
+  const reserved =
+    agents.filter(
+      (agent) =>
+        agent.reservedFor ===
+        interval.id
     );
+
+  /*
+    Si no alcanza la reserva, completamos
+    con agentes disponibles.
+  */
+
+  const available =
+    agents
+      .filter(
+        (agent) =>
+          !reserved.includes(agent) &&
+          agent.availableAt <=
+            timeToMinutes(interval.start)
+      )
+      .sort(
+        (a, b) =>
+          a.id - b.id
+      );
+
+  return [
+    ...reserved,
+    ...available,
+  ].slice(
+    0,
+    interval.booths
+  );
 }
+
 
 // =========================================================
 // ASIGNAR INTERVALO DE UNA SOLA CASILLA
@@ -205,7 +234,8 @@ function selectReservedAgents(
   const nextDemand = [...demand]
     .filter(
       (item) =>
-        timeToMinutes(item.start) > currentTime &&
+        timeToMinutes(item.start) >
+          currentTime &&
         item.booths >= 2
     )
     .sort(
@@ -221,12 +251,73 @@ function selectReservedAgents(
   const nextStart =
     timeToMinutes(nextDemand.start);
 
+  const releaseDeadline =
+    nextStart - TRAVEL_TIME;
+
+  /*
+    Si ya estamos dentro de la ventana
+    de traslado, no hacemos nuevas reservas.
+  */
+  if (currentTime >= releaseDeadline) {
+    return agents.filter(
+      (agent) =>
+        agent.reservedFor ===
+        nextDemand.id
+    );
+  }
+
   const required =
     nextDemand.booths;
 
-  return [...agents]
-    .sort((a, b) => a.id - b.id)
-    .slice(0, required);
+  /*
+    Primero conservamos los agentes
+    que ya estaban reservados.
+  */
+  const alreadyReserved =
+    agents.filter(
+      (agent) =>
+        agent.reservedFor ===
+        nextDemand.id
+    );
+
+  /*
+    Completamos la reserva si todavía
+    faltan agentes.
+  */
+  const remaining =
+    agents
+      .filter(
+        (agent) =>
+          agent.reservedFor !==
+            nextDemand.id &&
+          agent.availableAt <=
+            releaseDeadline
+      )
+      .sort(
+        (a, b) =>
+          a.id - b.id
+      );
+
+  const selected = [
+    ...alreadyReserved,
+    ...remaining,
+  ].slice(
+    0,
+    required
+  );
+
+  /*
+    Marcamos explícitamente a estos agentes
+    como necesarios para la próxima demanda.
+  */
+  selected.forEach(
+    (agent) => {
+      agent.reservedFor =
+        nextDemand.id;
+    }
+  );
+
+  return selected;
 }
 
 function getNextMultiBoothDemand(
@@ -648,13 +739,15 @@ function generateSchedule(
   }
 
   const agents = agentsInput.map(
-    (agent) => ({
-      ...agent,
-      minutes: 0,
-      assignments: [],
-      availableAt: 0,
-    })
-  );
+  (agent) => ({
+    ...agent,
+    minutes: 0,
+    assignments: [],
+    availableAt: 0,
+    reservedFor: null,
+  })
+);
+
 
   const sortedDemand = [...demand].sort(
     (a, b) =>
@@ -685,10 +778,9 @@ for (const interval of sortedDemand) {
     timeToMinutes(interval.end);
 
   if (interval.booths >= 2) {
-    const selected =
-      selectAgentsForFixedBlock(
+    const selected =selectAgentsForFixedBlock(
         agents,
-        interval.booths
+        interval
       );
 
     selected.forEach(
