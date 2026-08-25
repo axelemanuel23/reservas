@@ -185,32 +185,34 @@ function selectAgentsForFixedBlock(
   const start =
     timeToMinutes(interval.start);
 
-  const reserved =
-    agents.filter(
+  return [...agents]
+    .filter(
       (agent) =>
-        agent.reservedFor ===
-        interval.id
+        agent.availableAt <= start
+    )
+    .sort(
+      (a, b) => {
+        /*
+          1. Menor carga primero
+          2. ID como desempate
+        */
+
+        if (
+          a.minutes !== b.minutes
+        ) {
+          return (
+            a.minutes -
+            b.minutes
+          );
+        }
+
+        return a.id - b.id;
+      }
+    )
+    .slice(
+      0,
+      interval.booths
     );
-
-  const available =
-    agents
-      .filter(
-        (agent) =>
-          !reserved.includes(agent) &&
-          agent.availableAt <= start
-      )
-      .sort(
-        (a, b) =>
-          a.id - b.id
-      );
-
-  return [
-    ...reserved,
-    ...available,
-  ].slice(
-    0,
-    interval.booths
-  );
 }
 
 
@@ -226,8 +228,7 @@ function selectReservedAgents(
   const nextDemand = [...demand]
     .filter(
       (item) =>
-        timeToMinutes(item.start) >
-          currentTime &&
+        timeToMinutes(item.start) > currentTime &&
         item.booths >= 2
     )
     .sort(
@@ -248,13 +249,13 @@ function selectReservedAgents(
 
   /*
     Si ya estamos dentro de la ventana
-    de traslado, no hacemos nuevas reservas.
+    de traslado, solamente devolvemos
+    los que ya estaban reservados.
   */
   if (currentTime >= releaseDeadline) {
     return agents.filter(
       (agent) =>
-        agent.reservedFor ===
-        nextDemand.id
+        agent.reservedFor === nextDemand.id
     );
   }
 
@@ -262,28 +263,25 @@ function selectReservedAgents(
     nextDemand.booths;
 
   /*
-    Primero conservamos los agentes
-    que ya estaban reservados.
+    Agentes que ya estaban reservados
+    para este bloque.
   */
   const alreadyReserved =
     agents.filter(
       (agent) =>
-        agent.reservedFor ===
-        nextDemand.id
+        agent.reservedFor === nextDemand.id
     );
 
   /*
-    Completamos la reserva si todavía
-    faltan agentes.
+    Buscamos agentes adicionales que
+    puedan quedar libres antes del deadline.
   */
   const remaining =
     agents
       .filter(
         (agent) =>
-          agent.reservedFor !==
-            nextDemand.id &&
-          agent.availableAt <=
-            releaseDeadline
+          agent.reservedFor !== nextDemand.id &&
+          agent.availableAt <= releaseDeadline
       )
       .sort(
         (a, b) =>
@@ -299,29 +297,19 @@ function selectReservedAgents(
   );
 
   /*
-    Marcamos explícitamente a estos agentes
-    como necesarios para la próxima demanda.
+    IMPORTANTE:
+    acá SOLAMENTE reservamos.
+
+    NO agregamos assignment.
+    NO sumamos minutes.
+    NO cambiamos availableAt.
   */
   selected.forEach(
-  (agent, index) => {
-    addAssignment(
-      agent,
-      start,
-      end,
-      index + 1
-    );
-
-    agent.minutes +=
-      end - start;
-
-    agent.availableAt =
-      end;
-
-    agent.reservedFor =
-      null;
-  }
-);
-
+    (agent) => {
+      agent.reservedFor =
+        nextDemand.id;
+    }
+  );
 
   return selected;
 }
@@ -784,45 +772,39 @@ for (const interval of sortedDemand) {
     timeToMinutes(interval.end);
 
   if (interval.booths >= 2) {
-  const start =
-    timeToMinutes(interval.start);
-
-  const end =
-    timeToMinutes(interval.end);
-
-  const selected =
-    selectAgentsForFixedBlock(
-      agents,
-      interval
-    );
-
-  selected.forEach(
-    (agent, index) => {
-      addAssignment(
-        agent,
-        start,
-        end,
-        index + 1
+    const selected =
+      selectAgentsForFixedBlock(
+        agents,
+        interval
       );
 
-      agent.minutes +=
-        end - start;
+    selected.forEach(
+      (agent, index) => {
+        addAssignment(
+          agent,
+          start,
+          end,
+          index + 1
+        );
 
-      agent.availableAt =
-        end;
+        agent.minutes +=
+          end - start;
 
-      agent.reservedFor =
-        null;
-    }
-  );
-} else {
-  assignFlexibleInterval(
-    agents,
-    interval,
-    sortedDemand,
-    totalWork
-  );
-}
+        agent.availableAt =
+          end;
+
+        agent.reservedFor =
+          null;
+      }
+    );
+  } else {
+    assignFlexibleInterval(
+      agents,
+      interval,
+      sortedDemand,
+      totalWork
+    );
+  }
 }
 
   /*
