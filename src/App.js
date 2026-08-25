@@ -311,11 +311,25 @@ function selectReservedAgents(
     como necesarios para la próxima demanda.
   */
   selected.forEach(
-    (agent) => {
-      agent.reservedFor =
-        nextDemand.id;
-    }
-  );
+  (agent, index) => {
+    addAssignment(
+      agent,
+      start,
+      end,
+      index + 1
+    );
+
+    agent.minutes +=
+      end - start;
+
+    agent.availableAt =
+      end;
+
+    agent.reservedFor =
+      null;
+  }
+);
+
 
   return selected;
 }
