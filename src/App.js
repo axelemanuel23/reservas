@@ -422,53 +422,6 @@ function getAgentsNeededForNextDemand(
   );
 }
 
-
-function calculateTransitionPenalty(
-  agent,
-  currentTime,
-  demand
-) {
-  const nextDemand =
-    getNextDemand(
-      demand,
-      currentTime
-    );
-
-  if (!nextDemand) {
-    return 0;
-  }
-
-  const nextStart =
-    timeToMinutes(
-      nextDemand.start
-    );
-
-  const timeUntilNext =
-    nextStart - currentTime;
-
-  /*
-    Si estamos cerca de una apertura futura,
-    penalizamos utilizar agentes que necesitaremos
-    para esa apertura.
-  */
-
-  if (
-    timeUntilNext <=
-    TRAVEL_TIME
-  ) {
-    return 100000;
-  }
-
-  if (
-    timeUntilNext <=
-    TRAVEL_TIME * 2
-  ) {
-    return 1000;
-  }
-
-  return 0;
-}
-
 function assignFlexibleInterval(
   agents,
   interval,
