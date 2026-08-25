@@ -696,7 +696,8 @@ function assignFlexibleInterval(
           getFlexibleRemaining(
             agent,
             targets,
-            futureFixedMinutes
+            fixedPlan,
+            current
           );
 
         if (remaining > 0) {
