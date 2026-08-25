@@ -194,17 +194,81 @@ function getAgentTargets(agents, totalWork) {
   );
 }
 
-function getRemainingNeed(
+function getAgentTargets(agents, totalWork) {
+  const baseTarget = Math.floor(
+    totalWork / agents.length
+  );
+
+  const remainder =
+    totalWork % agents.length;
+
+  return agents.reduce(
+    (targets, agent, index) => {
+      targets[agent.id] =
+        baseTarget +
+        (index < remainder ? 1 : 0);
+
+      return targets;
+    },
+    {}
+  );
+}
+function getFutureCommittedMinutes(
   agent,
-  targets
+  demand,
+  currentTime
 ) {
-  return targets[agent.id] - agent.minutes;
+  return demand.reduce(
+    (total, item) => {
+      const start =
+        timeToMinutes(item.start);
+
+      const end =
+        timeToMinutes(item.end);
+
+      if (
+        start <= currentTime ||
+        item.booths < 2
+      ) {
+        return total;
+      }
+
+      /*
+        Por ahora no asignamos todavía
+        un agente concreto al bloque.
+
+        La cantidad de trabajo futuro
+        obligatorio para un agente será
+        determinada por sus reservas.
+      */
+
+      if (
+        agent.reservedFor === item.id
+      ) {
+        return (
+          total +
+          (end - start)
+        );
+      }
+
+      return total;
+    },
+    0
+  );
 }
 
 
+function getRemainingNeed(agent, targets) {
+  return Math.max(
+    0,
+    targets[agent.id] - agent.minutes
+  );
+}
+
 function selectAgentsForFixedBlock(
   agents,
-  interval
+  interval,
+  targets
 ) {
   const start =
     timeToMinutes(interval.start);
@@ -216,17 +280,27 @@ function selectAgentsForFixedBlock(
     )
     .sort(
       (a, b) => {
-        /*
-          1. Menor carga primero
-          2. ID como desempate
-        */
+        const aNeed =
+          getRemainingNeed(
+            a,
+            targets
+          );
 
+        const bNeed =
+          getRemainingNeed(
+            b,
+            targets
+          );
+
+        /*
+          Primero elegimos a quienes
+          todavía necesitan más minutos.
+        */
         if (
-          a.minutes !== b.minutes
+          aNeed !== bNeed
         ) {
           return (
-            a.minutes -
-            b.minutes
+            bNeed - aNeed
           );
         }
 
@@ -240,6 +314,7 @@ function selectAgentsForFixedBlock(
 }
 
 
+
 // =========================================================
 // ASIGNAR INTERVALO DE UNA SOLA CASILLA
 // =========================================================
@@ -247,39 +322,47 @@ function selectAgentsForFixedBlock(
 function selectReservedAgents(
   agents,
   demand,
-  currentTime
+  currentTime,
+  targets
 ) {
-  const nextDemand = [...demand]
-    .filter(
-      (item) =>
-        timeToMinutes(item.start) > currentTime &&
-        item.booths >= 2
-    )
-    .sort(
-      (a, b) =>
-        timeToMinutes(a.start) -
-        timeToMinutes(b.start)
-    )[0];
+  const nextDemand =
+    [...demand]
+      .filter(
+        (item) =>
+          timeToMinutes(item.start) >
+            currentTime &&
+          item.booths >= 2
+      )
+      .sort(
+        (a, b) =>
+          timeToMinutes(a.start) -
+          timeToMinutes(b.start)
+      )[0];
 
   if (!nextDemand) {
     return [];
   }
 
   const nextStart =
-    timeToMinutes(nextDemand.start);
+    timeToMinutes(
+      nextDemand.start
+    );
 
   const releaseDeadline =
     nextStart - TRAVEL_TIME;
 
   /*
     Si ya estamos dentro de la ventana
-    de traslado, solamente devolvemos
-    los que ya estaban reservados.
+    de traslado, devolvemos solamente
+    los agentes que ya estaban reservados.
   */
-  if (currentTime >= releaseDeadline) {
+  if (
+    currentTime >= releaseDeadline
+  ) {
     return agents.filter(
       (agent) =>
-        agent.reservedFor === nextDemand.id
+        agent.reservedFor ===
+        nextDemand.id
     );
   }
 
@@ -287,47 +370,72 @@ function selectReservedAgents(
     nextDemand.booths;
 
   /*
-    Agentes que ya estaban reservados
-    para este bloque.
+    Agentes ya reservados.
   */
   const alreadyReserved =
     agents.filter(
       (agent) =>
-        agent.reservedFor === nextDemand.id
+        agent.reservedFor ===
+        nextDemand.id
     );
 
   /*
-    Buscamos agentes adicionales que
-    puedan quedar libres antes del deadline.
+    Agentes disponibles para ser
+    reservados.
   */
-  const remaining =
+  const available =
     agents
       .filter(
         (agent) =>
-          agent.reservedFor !== nextDemand.id &&
-          agent.availableAt <= releaseDeadline
+          agent.reservedFor !==
+            nextDemand.id &&
+          agent.availableAt <=
+            releaseDeadline
       )
       .sort(
-        (a, b) =>
-          a.id - b.id
+        (a, b) => {
+          /*
+            Priorizamos al agente que
+            tenga MENOR carga proyectada.
+
+            La carga proyectada incluye
+            lo que ya trabajó.
+          */
+
+          const aRemaining =
+            getRemainingNeed(
+              a,
+              targets
+            );
+
+          const bRemaining =
+            getRemainingNeed(
+              b,
+              targets
+            );
+
+          if (
+            aRemaining !==
+            bRemaining
+          ) {
+            return (
+              bRemaining -
+              aRemaining
+            );
+          }
+
+          return a.id - b.id;
+        }
       );
 
   const selected = [
     ...alreadyReserved,
-    ...remaining,
+    ...available,
   ].slice(
     0,
     required
   );
 
-  /*
-    IMPORTANTE:
-    acá SOLAMENTE reservamos.
-
-    NO agregamos assignment.
-    NO sumamos minutes.
-    NO cambiamos availableAt.
-  */
   selected.forEach(
     (agent) => {
       agent.reservedFor =
@@ -337,6 +445,7 @@ function selectReservedAgents(
 
   return selected;
 }
+
 
 function getNextMultiBoothDemand(
   demand,
@@ -363,15 +472,19 @@ function assignFlexibleInterval(
   targets
 ) {
   let current =
-    timeToMinutes(interval.start);
+    timeToMinutes(
+      interval.start
+    );
 
   const end =
-    timeToMinutes(interval.end);
+    timeToMinutes(
+      interval.end
+    );
 
   while (current < end) {
     /*
       --------------------------------------------------
-      PRÓXIMA DEMANDA DE MÚLTIPLES CASILLAS
+      PRÓXIMA DEMANDA MULTI-CASILLA
       --------------------------------------------------
     */
 
@@ -381,7 +494,8 @@ function assignFlexibleInterval(
         current
       );
 
-    let releaseDeadline = Infinity;
+    let releaseDeadline =
+      Infinity;
 
     if (nextDemand) {
       const nextStart =
@@ -390,22 +504,13 @@ function assignFlexibleInterval(
         );
 
       releaseDeadline =
-        nextStart - TRAVEL_TIME;
+        nextStart -
+        TRAVEL_TIME;
     }
 
     /*
       --------------------------------------------------
-      FINAL DEL TRAMO
-      --------------------------------------------------
-
-      Si tenemos que liberar agentes a las
-      04:30, nunca asignamos un turno que
-      atraviese las 04:30.
-    */
-
-    /*
-      --------------------------------------------------
-      AGENTES QUE DEBEN ESTAR RESERVADOS
+      RESERVAS
       --------------------------------------------------
     */
 
@@ -419,7 +524,8 @@ function assignFlexibleInterval(
         selectReservedAgents(
           agents,
           demand,
-          current
+          current,
+          targets
         );
     }
 
@@ -427,86 +533,18 @@ function assignFlexibleInterval(
       --------------------------------------------------
       CANDIDATOS
       --------------------------------------------------
-
-      IMPORTANTE:
-
-      Antes del deadline pueden trabajar
-      TODOS los agentes.
-
-      Los reservados simplemente NO pueden
-      quedar ocupados después del deadline.
-
-      Esto permite:
-
-          Pedro 03:30 → 04:00
-          Juan  04:00 → 04:30
-          Marcos 04:30 → 05:00
     */
 
-    let candidates = [];
-
-for (const agent of agents) {
-  if (
-    agent.availableAt <= current
-  ) {
-    candidates.push(agent);
-  }
-}
+    let candidates =
+      agents.filter(
+        (agent) =>
+          agent.availableAt <=
+          current
+      );
 
     /*
-      --------------------------------------------------
-      SI ESTAMOS ANTES DEL DEADLINE
-      --------------------------------------------------
-
-      Todos pueden trabajar.
-
-      Pero priorizamos agentes que NO están
-      reservados solamente si eso ayuda a
-      repartir la carga.
-
-      FIFO sigue siendo la prioridad principal.
-    */
-
-    if (
-      current < releaseDeadline &&
-      reservedAgents.length > 0
-    ) {
-      const nonReserved =
-        candidates.filter(
-          (agent) =>
-            !reservedAgents.includes(
-              agent
-            )
-        );
-
-      const reserved =
-        candidates.filter(
-          (agent) =>
-            reservedAgents.includes(
-              agent
-            )
-        );
-
-      /*
-        Primero los agentes no reservados.
-
-        Así evitamos gastar demasiado tiempo
-        de quienes necesitan trasladarse.
-      */
-
-      candidates = [
-        ...nonReserved,
-        ...reserved,
-      ];
-    }
-
-    /*
-      --------------------------------------------------
-      DESPUÉS DEL DEADLINE
-      --------------------------------------------------
-
-      Los agentes reservados ya deben
-      estar libres para trasladarse.
+      Después del deadline,
+      los reservados deben estar libres.
     */
 
     if (
@@ -524,21 +562,18 @@ for (const agent of agents) {
 
     /*
       --------------------------------------------------
-      NO HAY CANDIDATOS
+      SI NO HAY CANDIDATOS
       --------------------------------------------------
     */
 
     if (
       candidates.length === 0
     ) {
-      /*
-        Si no podemos seguir trabajando
-        en este tramo, avanzamos al deadline.
-      */
-
       if (
-        releaseDeadline !== Infinity &&
-        current < releaseDeadline
+        releaseDeadline !==
+          Infinity &&
+        current <
+          releaseDeadline
       ) {
         current =
           releaseDeadline;
@@ -551,65 +586,81 @@ for (const agent of agents) {
 
     /*
       --------------------------------------------------
-      ORDEN FIFO
+      SELECCIÓN
       --------------------------------------------------
 
-      Este es el criterio principal.
+      Priorizamos al agente con
+      mayor necesidad restante.
 
-      El agente que fue cargado primero
-      tiene prioridad.
+      Esto es importante:
+
+      Si Pedro necesita 140
+      y Juan/Marcos necesitan
+      solamente 80 antes del
+      bloque futuro, Pedro toma
+      primero el tramo.
     */
 
     candidates.sort(
-      (a, b) =>
-        a.id - b.id
-    );
+      (a, b) => {
+        const aNeed =
+          getRemainingNeed(
+            a,
+            targets
+          );
 
-    /*
-      --------------------------------------------------
-      SELECCIONAR AGENTE
-      --------------------------------------------------
-    */
+        const bNeed =
+          getRemainingNeed(
+            b,
+            targets
+          );
+
+        if (
+          aNeed !== bNeed
+        ) {
+          return (
+            bNeed - aNeed
+          );
+        }
+
+        return a.id - b.id;
+      }
+    );
 
     const selected =
       candidates[0];
 
     /*
       --------------------------------------------------
-      DURACIÓN
+      DURACIÓN MÁXIMA
       --------------------------------------------------
-
-      El agente puede trabajar hasta:
-
-      1. el final del intervalo
-      2. el deadline de traslado
-      3. su objetivo restante
     */
 
     let duration =
       end - current;
 
+    /*
+      Nunca atravesamos el deadline.
+    */
+
     if (
-      releaseDeadline !== Infinity &&
-      current < releaseDeadline
+      releaseDeadline !==
+        Infinity &&
+      current <
+        releaseDeadline
     ) {
       duration =
         Math.min(
           duration,
-          releaseDeadline - current
+          releaseDeadline -
+            current
         );
     }
 
     /*
       --------------------------------------------------
-      BALANCE DE CARGA
+      NECESIDAD RESTANTE
       --------------------------------------------------
-
-      El balance NO domina FIFO.
-
-      Solo evitamos darle tiempo a un agente
-      que ya está por encima del objetivo
-      cuando hay otros disponibles.
     */
 
     const remainingNeed =
@@ -618,18 +669,28 @@ for (const agent of agents) {
         targets
       );
 
-    if (
-      remainingNeed > 0
-    ) {
-      duration =
-        Math.min(
-          duration,
-          remainingNeed
-        );
-    }
+    /*
+      Nunca damos más minutos
+      de los que necesita.
+    */
+
+    duration =
+      Math.min(
+        duration,
+        remainingNeed
+      );
 
     /*
-      Si el agente ya alcanzó su objetivo,
+      --------------------------------------------------
+      MINUTOS ENTEROS
+      --------------------------------------------------
+    */
+
+    duration =
+      Math.floor(duration);
+
+    /*
+      Si ya llegó a su objetivo,
       buscamos otro.
     */
 
@@ -647,70 +708,69 @@ for (const agent of agents) {
 
       if (!alternative) {
         /*
-          Todos alcanzaron el objetivo.
-          Usamos FIFO igualmente.
+          Nadie necesita más minutos
+          dentro del objetivo.
+
+          No seguimos cargando
+          arbitrariamente al primero.
         */
+        break;
+      }
 
-        duration =
-          Math.min(
-            end - current,
-            releaseDeadline -
-              current
-          );
+      /*
+        Reintentamos inmediatamente
+        con el siguiente agente.
+      */
 
-        if (
-          !Number.isFinite(
-            duration
-          )
-        ) {
-          duration =
-            end - current;
-        }
+      const alternativeNeed =
+        getRemainingNeed(
+          alternative,
+          targets
+        );
 
-        if (duration <= 0) {
-          break;
-        }
-      } else {
-        /*
-          Cambiamos al siguiente agente.
-        */
+      duration =
+        Math.min(
+          end - current,
+          alternativeNeed
+        );
 
-        const alternativeNeed =
-          getRemainingNeed(
-            alternative,
-            targets
-          );
-
+      if (
+        releaseDeadline !==
+          Infinity
+      ) {
         duration =
           Math.min(
             duration,
-            alternativeNeed
+            releaseDeadline -
+              current
           );
-
-        if (
-          duration <= 0
-        ) {
-          break;
-        }
-
-        addAssignment(
-          alternative,
-          current,
-          current + duration,
-          1
-        );
-
-        alternative.minutes +=
-          duration;
-
-        alternative.availableAt =
-          current + duration;
-
-        current +=
-          duration;
-
-        continue;
       }
+
+      duration =
+        Math.floor(duration);
+
+      if (
+        duration <= 0
+      ) {
+        break;
+      }
+
+      addAssignment(
+        alternative,
+        current,
+        current + duration,
+        1
+      );
+
+      alternative.minutes +=
+        duration;
+
+      alternative.availableAt =
+        current + duration;
+
+      current += duration;
+
+      continue;
     }
 
     /*
@@ -735,7 +795,6 @@ for (const agent of agents) {
     current += duration;
   }
 }
-
 // =========================================================
 // GENERADOR PRINCIPAL
 // =========================================================
@@ -807,7 +866,8 @@ for (const interval of sortedDemand) {
     const selected =
       selectAgentsForFixedBlock(
         agents,
-        interval
+        interval,
+        targets
       );
 
     selected.forEach(
