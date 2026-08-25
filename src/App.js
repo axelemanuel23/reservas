@@ -221,9 +221,6 @@ function selectReservedAgents(
   const nextStart =
     timeToMinutes(nextDemand.start);
 
-  const releaseDeadline =
-    nextStart - TRAVEL_TIME;
-
   const required =
     nextDemand.booths;
 
@@ -296,12 +293,6 @@ function assignFlexibleInterval(
       04:30, nunca asignamos un turno que
       atraviese las 04:30.
     */
-
-    const segmentEnd =
-      Math.min(
-        end,
-        releaseDeadline
-      );
 
     /*
       --------------------------------------------------
