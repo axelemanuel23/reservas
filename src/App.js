@@ -340,28 +340,6 @@ function getNextDemand(
     )[0];
 }
 
-function getRequiredAgentsAt(
-  demand,
-  time
-) {
-  return demand
-    .filter((item) => {
-      const start = timeToMinutes(item.start);
-      const end = timeToMinutes(item.end);
-
-      return (
-        start <= time &&
-        time < end
-      );
-    })
-    .reduce(
-      (total, item) =>
-        total + item.booths,
-      0
-    );
-}
-
-
 function getAgentsNeededForNextDemand(
   agents,
   demand,
@@ -382,64 +360,66 @@ function getAgentsNeededForNextDemand(
       nextDemand.start
     );
 
-  /*
-    Los agentes que deben quedar libres antes
-    de la próxima apertura.
-
-    Ejemplo:
-
-      ahora = 03:30
-      próxima apertura = 05:00
-      TRAVEL_TIME = 30
-
-    Los agentes necesarios deben quedar
-    disponibles como máximo a las 04:30.
-  */
-
   const releaseDeadline =
     nextStart - TRAVEL_TIME;
 
   const required =
     nextDemand.booths;
 
-  const currentlyFree =
+  /*
+    Agentes que ya están disponibles con
+    suficiente anticipación para desplazarse.
+  */
+  const availableAgents =
     agents.filter(
       (agent) =>
         agent.availableAt <=
         releaseDeadline
     );
 
-  if (
-    currentlyFree.length >= required
-  ) {
+  const missing =
+    required -
+    availableAgents.length;
+
+  if (missing <= 0) {
     return [];
   }
 
-  const missing =
-    required -
-    currentlyFree.length;
+  /*
+    Los agentes que necesitamos reservar
+    para la próxima apertura.
 
-  return [...agents]
-    .filter(
-      (agent) =>
-        !currentlyFree.includes(agent)
-    )
-    .sort((a, b) => {
-      /*
-        Primero liberamos a los agentes
-        con mayor carga.
+    Priorizamos los de mayor carga.
+  */
+  const candidates =
+    agents
+      .filter(
+        (agent) =>
+          !availableAgents.includes(
+            agent
+          )
+      )
+      .sort((a, b) => {
+        if (
+          a.minutes !==
+          b.minutes
+        ) {
+          return (
+            b.minutes -
+            a.minutes
+          );
+        }
 
-        Así preservamos a los agentes
-        con menos minutos para el equilibrio.
-      */
+        return (
+          a.id -
+          b.id
+        );
+      });
 
-      if (a.minutes !== b.minutes) {
-        return b.minutes - a.minutes;
-      }
-
-      return a.id - b.id;
-    })
-    .slice(0, missing);
+  return candidates.slice(
+    0,
+    missing
+  );
 }
 
 
@@ -506,168 +486,23 @@ function assignFlexibleInterval(
     );
 
   while (current < end) {
+    const currentTime =
+      current;
+
     const remainingInterval =
-      end - current;
+      end - currentTime;
 
     /*
-      Detectamos qué agentes necesitamos
-      liberar para la próxima apertura.
+      Buscamos la próxima apertura.
     */
-
-    const agentsToRelease =
-      getAgentsNeededForNextDemand(
-        agents,
-        demand,
-        current
-      );
-
-    const candidates =
-      agents
-        .map((agent) => {
-          const target =
-            targets.find(
-              (item) =>
-                item.id === agent.id
-            ).target;
-
-          const remaining =
-            target -
-            agent.minutes;
-
-          const transitionPenalty =
-            agentsToRelease.includes(agent)
-              ? 100000
-              : calculateTransitionPenalty(
-                  agent,
-                  current,
-                  demand
-                );
-
-          const last =
-            agent.assignments[
-              agent.assignments.length - 1
-            ];
-
-          const continuity =
-            last &&
-            last.end === current
-              ? 1
-              : 0;
-
-          return {
-            agent,
-            remaining,
-            continuity,
-            transitionPenalty,
-          };
-        })
-        .sort((a, b) => {
-          /*
-            PRIORIDAD 1:
-            No utilizar agentes que necesitamos
-            liberar para la próxima apertura.
-          */
-
-          if (
-            a.transitionPenalty !==
-            b.transitionPenalty
-          ) {
-            return (
-              a.transitionPenalty -
-              b.transitionPenalty
-            );
-          }
-
-          /*
-            PRIORIDAD 2:
-            Continuidad de la casilla.
-          */
-
-          if (
-            a.continuity !==
-            b.continuity
-          ) {
-            return (
-              b.continuity -
-              a.continuity
-            );
-          }
-
-          /*
-            PRIORIDAD 3:
-            Balance de carga.
-          */
-
-          if (
-            a.remaining !==
-            b.remaining
-          ) {
-            return (
-              b.remaining -
-              a.remaining
-            );
-          }
-
-          return (
-            a.agent.id -
-            b.agent.id
-          );
-        });
-
-    let selected =
-      candidates[0];
-
-    if (!selected) {
-      break;
-    }
-
-    /*
-      Si el agente seleccionado tiene que
-      quedar libre para la próxima apertura,
-      buscamos otro agente.
-
-      Esto permite que aparezca un relevo.
-    */
-
-    if (
-      agentsToRelease.includes(
-        selected.agent
-      )
-    ) {
-      const alternative =
-        candidates.find(
-          (candidate) =>
-            !agentsToRelease.includes(
-              candidate.agent
-            )
-        );
-
-      if (alternative) {
-        selected = alternative;
-      }
-    }
-
-    if (!selected) {
-      break;
-    }
-
-    let duration;
-
-    /*
-      Calculamos cuánto tiempo puede continuar
-      este agente antes de que necesitemos
-      liberar a los agentes destinados a la
-      siguiente apertura.
-    */
-
     const nextDemand =
       getNextDemand(
         demand,
-        current
+        currentTime
       );
 
-    let maximumUntilTransition =
-      remainingInterval;
+    let releaseDeadline =
+      Infinity;
 
     if (nextDemand) {
       const nextStart =
@@ -675,50 +510,283 @@ function assignFlexibleInterval(
           nextDemand.start
         );
 
-      const releaseDeadline =
+      releaseDeadline =
         nextStart -
         TRAVEL_TIME;
+    }
 
-      maximumUntilTransition =
+    /*
+      Agentes que necesitamos reservar
+      para la próxima apertura.
+    */
+    const agentsToRelease =
+      getAgentsNeededForNextDemand(
+        agents,
+        demand,
+        currentTime
+      );
+
+    /*
+      Construimos los candidatos.
+
+      IMPORTANTE:
+      hacemos todos los cálculos aquí,
+      antes del sort, para evitar el error
+      no-loop-func.
+    */
+    const candidates =
+      agents.map((agent) => {
+        const target =
+          targets.find(
+            (item) =>
+              item.id === agent.id
+          ).target;
+
+        const remaining =
+          target -
+          agent.minutes;
+
+        const last =
+          agent.assignments[
+            agent.assignments.length - 1
+          ];
+
+        const continuity =
+          last &&
+          last.end ===
+            currentTime
+            ? 1
+            : 0;
+
+        const mustRelease =
+          agentsToRelease.includes(
+            agent
+          );
+
+        return {
+          agent,
+          target,
+          remaining,
+          continuity,
+          mustRelease,
+        };
+      });
+
+    /*
+      Orden de prioridad:
+
+      1. No utilizar agentes reservados.
+      2. Continuidad.
+      3. Menor carga / mayor necesidad
+         de minutos.
+    */
+    candidates.sort(
+      (a, b) => {
+        if (
+          a.mustRelease !==
+          b.mustRelease
+        ) {
+          return a.mustRelease
+            ? 1
+            : -1;
+        }
+
+        if (
+          a.continuity !==
+          b.continuity
+        ) {
+          return (
+            b.continuity -
+            a.continuity
+          );
+        }
+
+        if (
+          a.remaining !==
+          b.remaining
+        ) {
+          return (
+            b.remaining -
+            a.remaining
+          );
+        }
+
+        return (
+          a.agent.id -
+          b.agent.id
+        );
+      }
+    );
+
+    if (
+      candidates.length === 0
+    ) {
+      break;
+    }
+
+    let selected =
+      candidates[0];
+
+    /*
+      Si por alguna razón el primero
+      está reservado, buscamos otro.
+    */
+    if (
+      selected.mustRelease
+    ) {
+      const alternative =
+        candidates.find(
+          (candidate) =>
+            !candidate.mustRelease
+        );
+
+      if (alternative) {
+        selected =
+          alternative;
+      }
+    }
+
+    /*
+      --------------------------------------------------
+      CÁLCULO DEL TIEMPO DISPONIBLE
+      --------------------------------------------------
+
+      El agente puede trabajar como máximo
+      hasta el momento en que necesitamos
+      liberar a los agentes reservados.
+    */
+    let maxDuration =
+      remainingInterval;
+
+    if (
+      releaseDeadline !==
+      Infinity
+    ) {
+      maxDuration =
         Math.max(
           0,
           releaseDeadline -
-            current
+            currentTime
         );
     }
 
     /*
-      Evitamos que una sola persona absorba
-      todo el intervalo si necesitamos preparar
-      la siguiente apertura.
+      Si no queda tiempo antes del desplazamiento,
+      necesitamos entrar directamente en
+      la etapa de relevo.
     */
+    if (
+      maxDuration <= 0
+    ) {
+      const fallback =
+        candidates.find(
+          (candidate) =>
+            !candidate.mustRelease
+        );
 
-    duration = Math.min(
-      remainingInterval,
-      maximumUntilTransition
-    );
+      if (!fallback) {
+        break;
+      }
 
-    /*
-      Si ya estamos dentro de la ventana
-      de transición, usamos un tramo corto
-      para forzar el relevo.
-    */
+      selected =
+        fallback;
 
-    if (duration <= 0) {
-      duration = Math.min(
-        remainingInterval,
-        30
-      );
+      maxDuration =
+        remainingInterval;
     }
 
-    if (duration <= 0) {
+    /*
+      --------------------------------------------------
+      DURACIÓN DINÁMICA
+      --------------------------------------------------
+
+      No usamos siempre 30 minutos.
+
+      Calculamos cuánto debería trabajar
+      este agente según su carga.
+    */
+    let duration =
+      maxDuration;
+
+    const nextNonReserved =
+      candidates.find(
+        (candidate) =>
+          !candidate.mustRelease
+      );
+
+    if (
+      nextNonReserved &&
+      !selected.mustRelease
+    ) {
+      const currentLoad =
+        selected.agent.minutes;
+
+      const otherLoad =
+        nextNonReserved
+          .agent.minutes;
+
+      /*
+        Si hay una diferencia de carga,
+        el agente con más carga recibe
+        menos tiempo.
+
+        Esto permite producir cosas como:
+
+          Pedro 40 min
+          Juan 20 min
+          Marcos 30 min
+
+        en lugar de forzar siempre
+        intervalos idénticos.
+      */
+      if (
+        currentLoad >
+        otherLoad
+      ) {
+        const difference =
+          currentLoad -
+          otherLoad;
+
+        duration =
+          Math.min(
+            duration,
+            Math.max(
+              1,
+              Math.floor(
+                duration -
+                  difference /
+                    2
+              )
+            )
+          );
+      }
+    }
+
+    /*
+      Nunca superar el intervalo.
+    */
+    duration =
+      Math.min(
+        duration,
+        remainingInterval
+      );
+
+    if (
+      duration <= 0
+    ) {
       break;
     }
 
+    /*
+      --------------------------------------------------
+      ASIGNACIÓN
+      --------------------------------------------------
+    */
     addAssignment(
       selected.agent,
-      current,
-      current + duration,
+      currentTime,
+      currentTime +
+        duration,
       1
     );
 
@@ -726,9 +794,12 @@ function assignFlexibleInterval(
       duration;
 
     selected.agent.availableAt =
-      current + duration;
+      currentTime +
+      duration;
 
-    current += duration;
+    current =
+      currentTime +
+      duration;
   }
 }
 /*
