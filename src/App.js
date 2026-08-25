@@ -284,9 +284,6 @@ function assignFlexibleInterval(
         if (a.remaining !== b.remaining) {
           return b.remaining - a.remaining;
         }
-        
-        return a.agent.id - b.agent.id;
-
         const aLast =
           a.agent.assignments[
             a.agent.assignments.length - 1
