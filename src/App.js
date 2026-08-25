@@ -1,4 +1,4 @@
-cimport { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import './App.css';
 
 const INITIAL_AGENTS = [
