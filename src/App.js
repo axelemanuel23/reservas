@@ -297,7 +297,7 @@ function validateGeneratedSchedule(agents, demand) {
 // GENERADOR PRINCIPAL
 // =========================================================
 
-function generateSchedule(agentsInput, demand) {
+export function generateSchedule(agentsInput, demand) {
   const error = validateDemand(agentsInput, demand);
   if (error) return { error, schedule: [], stats: null };
 
@@ -327,9 +327,6 @@ function generateSchedule(agentsInput, demand) {
   const scheduleError = validateGeneratedSchedule(agents, sortedDemand);
   if (scheduleError) return { error: scheduleError, schedule: [], stats: null };
 
-  for (const agent of agents) {
-  agent.assignments.sort((a, b) => a.start - b.start);
-
   const loads = agents.map((agent) => agent.minutes);
   const minMinutes = Math.min(...loads);
   const maxMinutes = Math.max(...loads);
@@ -351,7 +348,7 @@ function generateSchedule(agentsInput, demand) {
 // TESTS MANUALES DEL MOTOR
 // =========================================================
 
-/*export function runSchedulerTests() {
+export function runSchedulerTests() {
   const agents = [
     { id: 1, name: "Juan" },
     { id: 2, name: "Pedro" },
@@ -445,13 +442,13 @@ function generateSchedule(agentsInput, demand) {
 
   return { test1, test2, test3, test4, test5 };
 }
-*/
+
 // =========================================================
 // COMPONENTE REACT
 // (sin cambios de UI respecto del original â€” solo consume el motor)
 // =========================================================
 
-function App() {
+export default function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
   const [demand, setDemand] = useState(INITIAL_DEMAND);
 
