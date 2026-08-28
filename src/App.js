@@ -1,6 +1,57 @@
 import { useMemo, useState } from "react";
 import "./App.css";
 
+// =========================================================
+// CATÁLOGO FIJO DE CASILLAS
+//
+// Dos sectores con numeración propia. La demanda ya no se carga
+// como una cantidad ("2 casillas"), sino como una selección concreta
+// de casillas de estos catálogos (ej: Entrada 3, Entrada 7, Salida 2).
+// =========================================================
+
+const BOOTH_CATALOG = {
+  entrada: 16,
+  salida: 11,
+};
+
+const SECTOR_LABEL = {
+  entrada: "Entrada",
+  salida: "Salida",
+};
+
+function boothKey(booth) {
+  return `${booth.sector}-${booth.numero}`;
+}
+
+function boothLabel(booth) {
+  return `${SECTOR_LABEL[booth.sector]} ${booth.numero}`;
+}
+
+// =========================================================
+// SESGO DE ASIGNACIÓN POR SECTOR
+//
+// Cuando hay varias casillas simultáneas, el agente que llegó antes
+// (mayor prioridad = menor carga acumulada, empate por ID) recibe la
+// casilla "preferencial" de su sector:
+//   - Entrada primero, Salida después.
+//   - Dentro de Entrada: de mayor a menor numeración.
+//   - Dentro de Salida: de menor a mayor numeración.
+// Es un sesgo puramente de etiquetado: no cambia un solo minuto de
+// carga horaria, solo decide qué texto queda grabado en el turno.
+// =========================================================
+
+function sortBoothsForAssignment(booths) {
+  const entrada = booths
+    .filter((b) => b.sector === "entrada")
+    .sort((a, b) => b.numero - a.numero);
+
+  const salida = booths
+    .filter((b) => b.sector === "salida")
+    .sort((a, b) => a.numero - b.numero);
+
+  return [...entrada, ...salida];
+}
+
 const INITIAL_AGENTS = [
   { id: 1, name: "Juan" },
   { id: 2, name: "Pedro" },
@@ -10,9 +61,31 @@ const INITIAL_AGENTS = [
 ];
 
 const INITIAL_DEMAND = [
-  { id: 1, start: "00:00", end: "01:00", booths: 2 },
-  { id: 2, start: "01:00", end: "05:00", booths: 1 },
-  { id: 3, start: "05:00", end: "06:00", booths: 3 },
+  {
+    id: 1,
+    start: "00:00",
+    end: "01:00",
+    booths: [
+      { sector: "entrada", numero: 1 },
+      { sector: "entrada", numero: 2 },
+    ],
+  },
+  {
+    id: 2,
+    start: "01:00",
+    end: "05:00",
+    booths: [{ sector: "entrada", numero: 1 }],
+  },
+  {
+    id: 3,
+    start: "05:00",
+    end: "06:00",
+    booths: [
+      { sector: "salida", numero: 1 },
+      { sector: "salida", numero: 2 },
+      { sector: "salida", numero: 3 },
+    ],
+  },
 ];
 
 // =========================================================
@@ -38,7 +111,7 @@ function formatMinutes(minutes) {
 }
 
 // =========================================================
-// VALIDACIÃ“N
+// VALIDACIÓN
 // =========================================================
 
 function validateDemand(agents, demand) {
@@ -53,16 +126,30 @@ function validateDemand(agents, demand) {
 
   for (const item of normalized) {
     if (item.startMinutes >= item.endMinutes) {
-      return `Horario inválido: ${item.start} â†’ ${item.end}`;
+      return `Horario inválido: ${item.start} → ${item.end}`;
     }
-    if (item.booths < 1) {
-      return "La cantidad de casillas debe ser mayor a 0.";
+    if (!item.booths || item.booths.length < 1) {
+      return `El intervalo ${item.start} → ${item.end} necesita al menos una casilla seleccionada.`;
     }
-    if (item.booths > agents.length) {
+    if (item.booths.length > agents.length) {
       return (
-        `El intervalo ${item.start} â†’ ${item.end} requiere ${item.booths} ` +
+        `El intervalo ${item.start} → ${item.end} requiere ${item.booths.length} ` +
         `casillas pero solo hay ${agents.length} agentes.`
       );
+    }
+
+    const seen = new Set();
+    for (const booth of item.booths) {
+      const key = boothKey(booth);
+      if (seen.has(key)) {
+        return `El intervalo ${item.start} → ${item.end} tiene la casilla ${boothLabel(booth)} repetida.`;
+      }
+      seen.add(key);
+
+      const max = BOOTH_CATALOG[booth.sector];
+      if (!max || booth.numero < 1 || booth.numero > max) {
+        return `Casilla inválida: ${boothLabel(booth)}.`;
+      }
     }
   }
 
@@ -70,17 +157,17 @@ function validateDemand(agents, demand) {
     a.startMinutes !== b.startMinutes ? a.startMinutes - b.startMinutes : a.id - b.id
   );
 
-  // La demanda es absoluta: no permitimos superposiciÃ³n.
+  // La demanda es absoluta: no permitimos superposición.
   // Una casilla extra que se abre "en el medio" de otro intervalo no se
   // modela como solapamiento, sino como un intervalo nuevo y adyacente
-  // (ej: en vez de "1 casilla 01â†’05", cargÃ¡s "1 casilla 01â†’02",
-  // "2 casillas 02â†’03", "1 casilla 03â†’05"). El resto del motor no necesita
-  // saber que eso es una apertura excepcional: es un intervalo mÃ¡s.
+  // (ej: en vez de "1 casilla 01→05", cargás "1 casilla 01→02",
+  // "2 casillas 02→03", "1 casilla 03→05"). El resto del motor no necesita
+  // saber que eso es una apertura excepcional: es un intervalo más.
   for (let i = 1; i < sorted.length; i++) {
     if (sorted[i].startMinutes < sorted[i - 1].endMinutes) {
       return (
-        `Hay intervalos superpuestos: ${sorted[i - 1].start}  →’ ${sorted[i - 1].end} ` +
-        `y ${sorted[i].start}  →’ ${sorted[i].end}`
+        `Hay intervalos superpuestos: ${sorted[i - 1].start} → ${sorted[i - 1].end} ` +
+        `y ${sorted[i].start} → ${sorted[i].end}`
       );
     }
   }
@@ -91,21 +178,23 @@ function validateDemand(agents, demand) {
 function calculateTotalWork(demand) {
   return demand.reduce((total, item) => {
     const duration = timeToMinutes(item.end) - timeToMinutes(item.start);
-    return total + duration * item.booths;
+    return total + duration * item.booths.length;
   }, 0);
 }
 
 // =========================================================
-// CRITERIO ÃšNICO DE PRIORIDAD
+// CRITERIO ÚNICO DE PRIORIDAD
 //
-// Esta es la Ãºnica regla de selecciÃ³n de todo el motor:
+// Esta es la única regla de selección de todo el motor:
 //   1) menor cantidad de minutos acumulados hasta el momento
 //   2) a igualdad, menor ID (orden de llegada)
 //
-// Se usa tanto para elegir quiÃ©n entra a un bloque rÃ­gido (varias
-// casillas simultÃ¡neas) como para elegir quiÃ©n sigue en el relleno
-// flexible (una casilla). No hay heurÃ­sticas separadas ("capas",
-// "distribuciÃ³n desde los extremos") para cada caso.
+// Se usa tanto para elegir quién entra a un bloque rígido (varias
+// casillas simultáneas) como para elegir quién sigue en el relleno
+// flexible (una casilla). El mismo orden de prioridad es el que luego
+// se empareja con las casillas ordenadas por sector (ver
+// sortBoothsForAssignment): el más prioritario se lleva la casilla
+// "preferencial".
 // =========================================================
 
 function pickLeastLoaded(agents, loadOf, quantity) {
@@ -122,7 +211,7 @@ function addAssignment(agent, start, end, booth) {
 
   const last = agent.assignments[agent.assignments.length - 1];
 
-  // Si el turno nuevo continÃºa inmediatamente en la misma casilla,
+  // Si el turno nuevo continúa inmediatamente en la misma casilla,
   // lo unimos en vez de crear un segmento aparte.
   if (last && last.end === start && last.booth === booth) {
     last.end = end;
@@ -137,7 +226,7 @@ function addAssignment(agent, start, end, booth) {
 // OBJETIVO POR AGENTE
 //
 // Se calcula una sola vez, al principio: es el "ancla" contra la que
-// el relleno flexible sabe cuÃ¡ndo dejar de darle minutos a alguien.
+// el relleno flexible sabe cuándo dejar de darle minutos a alguien.
 // =========================================================
 
 function calculateTargets(agents, totalWork) {
@@ -146,25 +235,25 @@ function calculateTargets(agents, totalWork) {
   const base = Math.floor(totalWork / sortedById.length);
   const remainder = totalWork % sortedById.length;
 
-  // El resto (si la divisiÃ³n no es exacta) se lo lleva primero
-  // quien llegÃ³ antes.
+  // El resto (si la división no es exacta) se lo lleva primero
+  // quien llegó antes.
   return new Map(
     sortedById.map((agent, index) => [agent.id, base + (index < remainder ? 1 : 0)])
   );
 }
 
 // =========================================================
-// FASE 1 â€” BLOQUES RÃGIDOS (2+ casillas simultÃ¡neas)
+// FASE 1 — BLOQUES RÍGIDOS (2+ casillas simultáneas)
 //
-// Se procesan TODOS los bloques rÃ­gidos primero, en orden cronolÃ³gico,
+// Se procesan TODOS los bloques rígidos primero, en orden cronológico,
 // antes de tocar cualquier casilla individual. Esto es necesario:
-// como un bloque rÃ­gido no se puede partir entre agentes, hay que
-// "reservar" a los agentes menos cargados para Ã©l antes de que el
+// como un bloque rígido no se puede partir entre agentes, hay que
+// "reservar" a los agentes menos cargados para él antes de que el
 // relleno flexible los gaste completando objetivos.
 //
-// Un bloque rÃ­gido puede aparecer en cualquier punto del dÃ­a (al
+// Un bloque rígido puede aparecer en cualquier punto del día (al
 // principio, al final, o abrirse transitoriamente a mitad de otro
-// intervalo): no hay ninguna suposiciÃ³n sobre su posiciÃ³n, solo se
+// intervalo): no hay ninguna suposición sobre su posición, solo se
 // procesan en el orden en que ocurren.
 // =========================================================
 
@@ -177,14 +266,20 @@ function planRigidBlocks(agents, rigidIntervals) {
     const end = timeToMinutes(interval.end);
     const duration = end - start;
 
+    // Orden de prioridad: menor carga rígida acumulada, empate por ID.
     const selected = pickLeastLoaded(
       agents,
       (agent) => rigidMinutes.get(agent.id),
-      interval.booths
-    ).sort((a, b) => a.id - b.id); // menor ID â†’ casilla 1, etc.
+      interval.booths.length
+    );
+
+    // Orden de las casillas según el sesgo: Entrada (desc) antes que
+    // Salida (asc). El agente más prioritario recibe la primera.
+    const orderedBooths = sortBoothsForAssignment(interval.booths);
 
     selected.forEach((agent, index) => {
-      plan.push({ agentId: agent.id, booth: index + 1, start, end });
+      const booth = orderedBooths[index];
+      plan.push({ agentId: agent.id, booth: boothLabel(booth), start, end });
       rigidMinutes.set(agent.id, rigidMinutes.get(agent.id) + duration);
     });
   }
@@ -203,20 +298,20 @@ function applyRigidPlan(agents, plan) {
 }
 
 // =========================================================
-// FASE 2 â€” RELLENO FLEXIBLE (1 casilla)
+// FASE 2 — RELLENO FLEXIBLE (1 casilla)
 //
-// A diferencia de los bloques rÃ­gidos, una casilla individual SÃ se
+// A diferencia de los bloques rígidos, una casilla individual SÍ se
 // puede repartir entre varios agentes dentro del mismo intervalo:
 // cada uno toma la casilla hasta llegar a su objetivo (o hasta que
-// se acabe el intervalo) y despuÃ©s releva el siguiente.
+// se acabe el intervalo) y después releva el siguiente.
 //
 // No se simula minuto a minuto: se entrega el intervalo en "cuotas",
 // una por cada cambio de agente.
 // =========================================================
 
 function pickNextFlexibleAgent(agents, targets, current) {
-  // Continuidad: si el agente que ya estaba en la casilla todavÃ­a
-  // necesita minutos, sigue Ã©l antes que evaluar a cualquier otro.
+  // Continuidad: si el agente que ya estaba en la casilla todavía
+  // necesita minutos, sigue él antes que evaluar a cualquier otro.
   // Esto evita cortes artificiales tipo "Juan 1 min, Pedro 1 min...".
   const continuing = agents.find((agent) => {
     const last = agent.assignments[agent.assignments.length - 1];
@@ -234,8 +329,8 @@ function pickNextFlexibleAgent(agents, targets, current) {
 
   if (stillNeeding.length > 0) return stillNeeding[0];
 
-  // Si ya nadie necesita mÃ¡s minutos (puede pasar por redondeos o por
-  // sobrecarga de los bloques rÃ­gidos), el intervalo igual hay que
+  // Si ya nadie necesita más minutos (puede pasar por redondeos o por
+  // sobrecarga de los bloques rígidos), el intervalo igual hay que
   // cubrirlo: lo absorbe quien tenga menos carga total.
   const [lowest] = pickLeastLoaded(agents, (agent) => agent.minutes, 1);
   return { agent: lowest, remaining: Infinity };
@@ -244,6 +339,7 @@ function pickNextFlexibleAgent(agents, targets, current) {
 function assignFlexibleInterval(agents, interval, targets) {
   let current = timeToMinutes(interval.start);
   const end = timeToMinutes(interval.end);
+  const label = boothLabel(interval.booths[0]);
 
   while (current < end) {
     const { agent, remaining } = pickNextFlexibleAgent(agents, targets, current);
@@ -251,14 +347,14 @@ function assignFlexibleInterval(agents, interval, targets) {
 
     if (!agent || duration <= 0) break;
 
-    addAssignment(agent, current, current + duration, 1);
+    addAssignment(agent, current, current + duration, label);
     agent.minutes += duration;
     current += duration;
   }
 }
 
 // =========================================================
-// VALIDACIÃ“N FINAL DEL SCHEDULE
+// VALIDACIÓN FINAL DEL SCHEDULE
 // =========================================================
 
 function validateGeneratedSchedule(agents, demand) {
@@ -275,15 +371,15 @@ function validateGeneratedSchedule(agents, demand) {
         );
 
         if (active.length > 1) {
-          return `El agente ${agent.name} estÃ¡ asignado a mÃ¡s de una casilla simultÃ¡neamente.`;
+          return `El agente ${agent.name} está asignado a más de una casilla simultáneamente.`;
         }
 
         activeCount += active.length;
       }
 
-      if (activeCount !== interval.booths) {
+      if (activeCount !== interval.booths.length) {
         return (
-          `La demanda ${interval.start} â†’ ${interval.end} requiere ${interval.booths} ` +
+          `La demanda ${interval.start} → ${interval.end} requiere ${interval.booths.length} ` +
           `casillas, pero el minuto ${minutesToTime(minute)} tiene ${activeCount} asignadas.`
         );
       }
@@ -312,25 +408,30 @@ export function generateSchedule(agentsInput, demand) {
   const totalWork = calculateTotalWork(sortedDemand);
   const targets = calculateTargets(agents, totalWork);
 
-  // Fase 1: todos los bloques rÃ­gidos (booths >= 2), en orden cronolÃ³gico.
-  const rigidIntervals = sortedDemand.filter((item) => item.booths >= 2);
+  // Fase 1: todos los bloques rígidos (2+ casillas), en orden cronológico.
+  const rigidIntervals = sortedDemand.filter((item) => item.booths.length >= 2);
   const { plan } = planRigidBlocks(agents, rigidIntervals);
   applyRigidPlan(agents, plan);
 
-  // Fase 2: relleno flexible (booths === 1), en orden cronolÃ³gico,
+  // Fase 2: relleno flexible (1 casilla), en orden cronológico,
   // usando como objetivo lo que falta para llegar a `targets`.
-  const flexibleIntervals = sortedDemand.filter((item) => item.booths === 1);
+  const flexibleIntervals = sortedDemand.filter((item) => item.booths.length === 1);
   for (const interval of flexibleIntervals) {
     assignFlexibleInterval(agents, interval, targets);
   }
 
   const scheduleError = validateGeneratedSchedule(agents, sortedDemand);
   if (scheduleError) return { error: scheduleError, schedule: [], stats: null };
-  
+
+  // Cada agente puede haber recibido turnos fuera de orden cronológico
+  // (los bloques rígidos se resuelven todos antes que los flexibles,
+  // sin importar a qué hora del día caiga cada uno). Se reordena acá,
+  // una sola vez, solo para que la lectura de izquierda a derecha en
+  // la tabla sea intuitiva — no afecta ningún cálculo de carga.
   for (const agent of agents) {
     agent.assignments.sort((a, b) => a.start - b.start);
   }
-  
+
   const loads = agents.map((agent) => agent.minutes);
   const minMinutes = Math.min(...loads);
   const maxMinutes = Math.max(...loads);
@@ -359,98 +460,167 @@ export function runSchedulerTests() {
     { id: 3, name: "Carlos" },
     { id: 4, name: "Luis" },
     { id: 5, name: "Miguel" },
+    { id: 6, name: "Diego" },
   ];
 
   // TEST 1
-  // 2 casillas durante una hora, arrancando todos en 0.
-  // Con el criterio Ãºnico (menor carga, menor ID) deben entrar
-  // los DOS PRIMEROS por orden de llegada: Juan (1) y Pedro (2).
+  // 2 casillas de Entrada durante una hora, arrancando todos en 0.
+  // Con el criterio único (menor carga, menor ID) deben entrar los DOS
+  // PRIMEROS por orden de llegada: Juan (1) y Pedro (2). Por el sesgo
+  // de Entrada (mayor a menor), Juan (más prioritario) debe quedar en
+  // la casilla de numeración más alta: Entrada 2.
   const test1 = generateSchedule(agents, [
-    { id: 1, start: "00:00", end: "01:00", booths: 2 },
+    {
+      id: 1,
+      start: "00:00",
+      end: "01:00",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
   ]);
 
-  console.assert(!test1.error, "TEST 1: no deberÃ­a haber error.");
+  console.assert(!test1.error, "TEST 1: no debería haber error.");
 
   const test1Assignments = test1.schedule.flatMap((agent) =>
     agent.assignments.map((a) => ({ agentId: agent.id, booth: a.booth }))
   );
 
   console.assert(
-    test1Assignments.some((item) => item.agentId === 1 && item.booth === 1),
-    "TEST 1: Juan debe estar en Casilla 1."
+    test1Assignments.some((item) => item.agentId === 1 && item.booth === "Entrada 2"),
+    "TEST 1: Juan debe estar en Entrada 2 (preferencial)."
   );
   console.assert(
-    test1Assignments.some((item) => item.agentId === 2 && item.booth === 2),
-    "TEST 1: Pedro debe estar en Casilla 2."
+    test1Assignments.some((item) => item.agentId === 2 && item.booth === "Entrada 1"),
+    "TEST 1: Pedro debe estar en Entrada 1."
   );
 
   // TEST 2
-  // 00â†’01 (2 casillas) + 05â†’06 (3 casillas): entre los dos bloques
-  // rÃ­gidos participan los 5 agentes exactamente una vez, 60 min c/u.
+  // Escenario descrito por el usuario: 00→00:30 (2 casillas Entrada),
+  // 00:30→05:00 (1 casilla), 05:00→06:00 (4 casillas Salida), 6 agentes.
+  // Los primeros dos agentes cubren el primer bloque; como ya llegan
+  // "cargados" a las 05:00, el segundo bloque rígido lo cubren los
+  // últimos cuatro (inversa). Los minutos restantes se reparten por
+  // orden de llegada en el tramo flexible.
   const test2 = generateSchedule(agents, [
-    { id: 1, start: "00:00", end: "01:00", booths: 2 },
-    { id: 2, start: "05:00", end: "06:00", booths: 3 },
+    {
+      id: 1,
+      start: "00:00",
+      end: "00:30",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+        { sector: "salida", numero: 4 },
+      ],
+    },
   ]);
 
-  console.assert(!test2.error, "TEST 2: no deberÃ­a haber error.");
+  console.assert(!test2.error, "TEST 2: no debería haber error.");
+
+  const test2Rigid1 = test2.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 0 && x.end === 30))
+    .map((a) => a.id)
+    .sort();
   console.assert(
-    test2.schedule.every((agent) => agent.minutes === 60),
-    "TEST 2: todos deberÃ­an tener 60 min."
+    JSON.stringify(test2Rigid1) === JSON.stringify([1, 2]),
+    "TEST 2: el primer bloque rígido debe cubrirlo Juan y Pedro."
   );
+
+  const test2Rigid2 = test2.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
+    .map((a) => a.id)
+    .sort();
+  console.assert(
+    JSON.stringify(test2Rigid2) === JSON.stringify([3, 4, 5, 6]),
+    "TEST 2: el segundo bloque rígido debe cubrirlo Carlos, Luis, Miguel y Diego."
+  );
+
+  // Reparto flexible esperado a mano: total = 570 min / 6 = 95 min c/u.
+  // Juan y Pedro ya tienen 30 min de rígido, Carlos/Luis/Miguel/Diego
+  // ya tienen 60 min. Juan sigue hasta 01:35, Pedro releva hasta 02:40,
+  // Carlos hasta 03:15, Luis hasta 03:50, Miguel hasta 04:25, Diego
+  // hasta 05:00 (donde empalma con su turno rígido).
+  const juan = test2.schedule.find((a) => a.id === 1);
+  const pedro = test2.schedule.find((a) => a.id === 2);
+  const diego = test2.schedule.find((a) => a.id === 6);
+
+  console.assert(
+    juan.assignments.some((a) => a.start === 30 && a.end === 95),
+    "TEST 2: Juan debería continuar hasta 01:35."
+  );
+  console.assert(
+    pedro.assignments.some((a) => a.start === 95 && a.end === 160),
+    "TEST 2: Pedro debería relevar hasta 02:40."
+  );
+  console.assert(
+    diego.assignments.some((a) => a.start === 265 && a.end === 300),
+    "TEST 2: Diego debería llegar justo hasta las 05:00."
+  );
+  console.assert(test2.stats.difference <= 1, "TEST 2: la diferencia debería ser mínima.");
 
   // TEST 3
-  // 2 casillas 00â†’01 + 1 casilla 01â†’02.
-  const test3 = generateSchedule(agents, [
-    { id: 1, start: "00:00", end: "01:00", booths: 2 },
-    { id: 2, start: "01:00", end: "02:00", booths: 1 },
-  ]);
-
-  console.assert(!test3.error, "TEST 3: no deberÃ­a haber error.");
-
-  const juan = test3.schedule.find((agent) => agent.id === 1);
-  const pedro = test3.schedule.find((agent) => agent.id === 2);
-
-  console.assert(juan.minutes === 60, "TEST 3: Juan debe terminar con 60 min.");
-  console.assert(pedro.minutes === 60, "TEST 3: Pedro debe terminar con 60 min.");
-
-  // TEST 4
-  // Caso completo: 00â†’01 (2) + 01â†’05 (1) + 05â†’06 (3).
-  // Total = 540 min â†’ 108 por agente, sin diferencia.
-  const test4 = generateSchedule(agents, INITIAL_DEMAND);
-
-  console.assert(!test4.error, "TEST 4: no deberÃ­a haber error.");
-  console.assert(test4.stats.target === 108, "TEST 4: objetivo esperado = 108 min.");
+  // Orden cronológico en el render: un agente que participa solo en el
+  // bloque rígido tardío no debe listar ese turno antes que uno más
+  // temprano en su propio array de assignments.
   console.assert(
-    test4.schedule.every((agent) => agent.minutes === 108),
-    "TEST 4: todos deberÃ­an terminar con 108 min."
-  );
-  console.assert(test4.stats.difference === 0, "TEST 4: diferencia esperada = 0.");
-
-  // TEST 5
-  // Casilla extra que se abre a mitad de un turno: en vez de
-  // "1 casilla 01â†’05" cargamos "1 casilla 01â†’02" + "2 casillas 02â†’03"
-  // + "1 casilla 03â†’05". No deberÃ­a requerir ningÃºn caso especial.
-  const test5 = generateSchedule(agents, [
-    { id: 1, start: "00:00", end: "01:00", booths: 2 },
-    { id: 2, start: "01:00", end: "02:00", booths: 1 },
-    { id: 3, start: "02:00", end: "03:00", booths: 2 },
-    { id: 4, start: "03:00", end: "05:00", booths: 1 },
-    { id: 5, start: "05:00", end: "06:00", booths: 3 },
-  ]);
-
-  console.assert(!test5.error, "TEST 5: no deberÃ­a haber error.");
-  console.assert(
-    test5.stats.difference <= 1,
-    "TEST 5: la diferencia entre el mÃ¡s y el menos cargado deberÃ­a ser mÃ­nima."
+    diego.assignments.every((a, i) => i === 0 || diego.assignments[i - 1].start <= a.start),
+    "TEST 3: los turnos de cada agente deben quedar ordenados cronológicamente."
   );
 
-  return { test1, test2, test3, test4, test5 };
+  return { test1, test2 };
 }
 
 // =========================================================
 // COMPONENTE REACT
-// (sin cambios de UI respecto del original â€” solo consume el motor)
 // =========================================================
+
+function BoothPicker({ sector, count, selected, onToggle }) {
+  const numbers = Array.from({ length: count }, (_, i) => i + 1);
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4 }}>
+        {SECTOR_LABEL[sector]}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {numbers.map((numero) => {
+          const isActive = selected.some((b) => b.sector === sector && b.numero === numero);
+          return (
+            <button
+              key={numero}
+              type="button"
+              onClick={() => onToggle(sector, numero)}
+              style={{
+                minWidth: 30,
+                height: 30,
+                borderRadius: 6,
+                border: isActive ? "1px solid #2563eb" : "1px solid #ccc",
+                background: isActive ? "#2563eb" : "#fff",
+                color: isActive ? "#fff" : "#333",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {numero}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
@@ -473,7 +643,7 @@ export default function App() {
 
   function addDemand() {
     const nextId = Math.max(0, ...demand.map((d) => d.id)) + 1;
-    setDemand([...demand, { id: nextId, start: "00:00", end: "01:00", booths: 1 }]);
+    setDemand([...demand, { id: nextId, start: "00:00", end: "01:00", booths: [] }]);
   }
 
   function removeDemand(id) {
@@ -481,12 +651,19 @@ export default function App() {
   }
 
   function updateDemand(id, field, value) {
+    setDemand(demand.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  function toggleBooth(demandId, sector, numero) {
     setDemand(
-      demand.map((item) =>
-        item.id === id
-          ? { ...item, [field]: field === "booths" ? Number(value) : value }
-          : item
-      )
+      demand.map((item) => {
+        if (item.id !== demandId) return item;
+        const exists = item.booths.some((b) => b.sector === sector && b.numero === numero);
+        const booths = exists
+          ? item.booths.filter((b) => !(b.sector === sector && b.numero === numero))
+          : [...item.booths, { sector, numero }];
+        return { ...item, booths };
+      })
     );
   }
 
@@ -532,38 +709,55 @@ export default function App() {
           <p>
             Los bloques con varias casillas se mantienen completos. Las casillas
             individuales se utilizan posteriormente para completar los minutos
-            faltantes, respetando el orden de llegada.
+            faltantes, respetando el orden de llegada. Al elegir casilla el que
+            llega primero recibe la preferencial de cada sector (Entrada: mayor
+            numeración primero; Salida: menor numeración primero).
           </p>
 
           <div className="demand-list">
             {demand.map((item) => (
-              <div key={item.id} className="demand-row">
-                <input
-                  className="input input-time"
-                  type="time"
-                  value={item.start}
-                  onChange={(event) => updateDemand(item.id, "start", event.target.value)}
-                />
-                <span className="time-arrow">â†’</span>
-                <input
-                  className="input input-time"
-                  type="time"
-                  value={item.end}
-                  onChange={(event) => updateDemand(item.id, "end", event.target.value)}
-                />
-                <div className="field">
-                  <span className="field-label">Casillas:</span>
+              <div key={item.id} className="demand-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
-                    className="input input-number"
-                    type="number"
-                    min="1"
-                    value={item.booths}
-                    onChange={(event) => updateDemand(item.id, "booths", event.target.value)}
+                    className="input input-time"
+                    type="time"
+                    value={item.start}
+                    onChange={(event) => updateDemand(item.id, "start", event.target.value)}
+                  />
+                  <span className="time-arrow">→</span>
+                  <input
+                    className="input input-time"
+                    type="time"
+                    value={item.end}
+                    onChange={(event) => updateDemand(item.id, "end", event.target.value)}
+                  />
+                  <span style={{ fontSize: 12, color: "#777" }}>
+                    {item.booths.length} casilla{item.booths.length === 1 ? "" : "s"} seleccionada
+                    {item.booths.length === 1 ? "" : "s"}
+                  </span>
+                  <button
+                    className="button button-danger"
+                    style={{ marginLeft: "auto" }}
+                    onClick={() => removeDemand(item.id)}
+                  >
+                    Eliminar
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                  <BoothPicker
+                    sector="entrada"
+                    count={BOOTH_CATALOG.entrada}
+                    selected={item.booths}
+                    onToggle={(sector, numero) => toggleBooth(item.id, sector, numero)}
+                  />
+                  <BoothPicker
+                    sector="salida"
+                    count={BOOTH_CATALOG.salida}
+                    selected={item.booths}
+                    onToggle={(sector, numero) => toggleBooth(item.id, sector, numero)}
                   />
                 </div>
-                <button className="button button-danger" onClick={() => removeDemand(item.id)}>
-                  Eliminar
-                </button>
               </div>
             ))}
           </div>
@@ -593,7 +787,7 @@ export default function App() {
                 <div className="stat-value">{formatMinutes(result.stats.minMinutes)}</div>
               </div>
               <div className="stat">
-                <div className="stat-label">Diferencia mÃ¡xima</div>
+                <div className="stat-label">Diferencia máxima</div>
                 <div
                   className={`stat-value ${result.stats.difference <= 1 ? "good" : "warning"}`}
                 >
@@ -626,11 +820,12 @@ export default function App() {
                       <td style={{ padding: 8 }}>
                         {agent.assignments.map((assignment, index) => (
                           <div key={index} className="assignment">
+                            <span className="assignment-booth">{assignment.booth}</span>
+                            {" — "}
                             <span className="assignment-time">
-                              {minutesToTime(assignment.start)}  →’ {minutesToTime(assignment.end)}
+                              {minutesToTime(assignment.start)} → {minutesToTime(assignment.end)}
                             </span>
-                            <span className="assignment-booth">Casilla {assignment.booth}</span>
-                            {" - "}
+                            {" — "}
                             <span>{assignment.minutes} min</span>
                           </div>
                         ))}
