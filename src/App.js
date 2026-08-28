@@ -696,10 +696,10 @@ function generatePlainTextSchedule(schedule) {
     const time = `${minutesToTime(row.start)}-${minutesToTime(row.end)}`;
 
     const assignments = row.active
-      .map(({ agent, booth }) => `${agent}\t-\t${booth}`)
+      .map(({ agent, booth }) => `${agent}-${booth}`)
       .join("\t/");
 
-    lines.push(`${time}\t${assignments}`);
+    lines.push(`${time} -> ${assignments}`);
   }
 
   return lines.join("\n");
