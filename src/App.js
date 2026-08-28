@@ -53,7 +53,7 @@ function validateDemand(agents, demand) {
 
   for (const item of normalized) {
     if (item.startMinutes >= item.endMinutes) {
-      return `Horario invÃ¡lido: ${item.start} â†’ ${item.end}`;
+      return `Horario inválido: ${item.start} â†’ ${item.end}`;
     }
     if (item.booths < 1) {
       return "La cantidad de casillas debe ser mayor a 0.";
@@ -79,8 +79,8 @@ function validateDemand(agents, demand) {
   for (let i = 1; i < sorted.length; i++) {
     if (sorted[i].startMinutes < sorted[i - 1].endMinutes) {
       return (
-        `Hay intervalos superpuestos: ${sorted[i - 1].start} â†’ ${sorted[i - 1].end} ` +
-        `y ${sorted[i].start} â†’ ${sorted[i].end}`
+        `Hay intervalos superpuestos: ${sorted[i - 1].start}  →’ ${sorted[i - 1].end} ` +
+        `y ${sorted[i].start}  →’ ${sorted[i].end}`
       );
     }
   }
@@ -494,8 +494,8 @@ export default function App() {
     <div className="app">
       <div className="container">
         <header className="header">
-          <h1>GestiÃ³n de horarios</h1>
-          <p>DistribuciÃ³n automÃ¡tica de agentes y casillas</p>
+          <h1>Gestión de horarios</h1>
+          <p>Distribución automática de agentes y casillas</p>
         </header>
 
         <section className="card">
@@ -627,10 +627,10 @@ export default function App() {
                         {agent.assignments.map((assignment, index) => (
                           <div key={index} className="assignment">
                             <span className="assignment-time">
-                              {minutesToTime(assignment.start)} â†’ {minutesToTime(assignment.end)}
+                              {minutesToTime(assignment.start)}  →’ {minutesToTime(assignment.end)}
                             </span>
                             <span className="assignment-booth">Casilla {assignment.booth}</span>
-                            {" â€” "}
+                            {" - "}
                             <span>{assignment.minutes} min</span>
                           </div>
                         ))}
