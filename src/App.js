@@ -326,7 +326,11 @@ export function generateSchedule(agentsInput, demand) {
 
   const scheduleError = validateGeneratedSchedule(agents, sortedDemand);
   if (scheduleError) return { error: scheduleError, schedule: [], stats: null };
-
+  
+  for (const agent of agents) {
+    agent.assignments.sort((a, b) => a.start - b.start);
+  }
+  
   const loads = agents.map((agent) => agent.minutes);
   const minMinutes = Math.min(...loads);
   const maxMinutes = Math.max(...loads);
