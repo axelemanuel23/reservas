@@ -757,7 +757,7 @@ export default function App() {
 
     try {
       await navigator.clipboard.writeText(text);
-      alert("Horario copiado al portapapeles.");
+      alert("Horario copiado al portapapeles! Ya podes pegarlo y enviarlo via mensajeria interna ;)");
     } catch (error) {
       console.error("No se pudo copiar el horario:", error);
       alert("No se pudo copiar el horario.");
