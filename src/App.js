@@ -689,7 +689,7 @@ function generatePlainTextSchedule(schedule) {
 
   const lines = [
     "Horario Guardia Nocturna",
-    "Hora\t\tAgente\t\tCasilla",
+    "Hora\t\tAgente-Casilla",
   ];
 
   for (const row of mergedRows) {
