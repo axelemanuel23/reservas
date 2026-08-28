@@ -297,7 +297,7 @@ function validateGeneratedSchedule(agents, demand) {
 // GENERADOR PRINCIPAL
 // =========================================================
 
-export function generateSchedule(agentsInput, demand) {
+function generateSchedule(agentsInput, demand) {
   const error = validateDemand(agentsInput, demand);
   if (error) return { error, schedule: [], stats: null };
 
@@ -451,7 +451,7 @@ export function generateSchedule(agentsInput, demand) {
 // (sin cambios de UI respecto del original â€” solo consume el motor)
 // =========================================================
 
-export default function App() {
+function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
   const [demand, setDemand] = useState(INITIAL_DEMAND);
 
