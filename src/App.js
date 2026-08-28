@@ -697,7 +697,7 @@ function generatePlainTextSchedule(schedule) {
 
     const assignments = row.active
       .map(({ agent, booth }) => `${agent}-${booth}`)
-      .join("\t/ ");
+      .join(" / ");
 
     lines.push(`${time} -> ${assignments}`);
   }
