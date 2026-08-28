@@ -351,7 +351,7 @@ export function generateSchedule(agentsInput, demand) {
 // TESTS MANUALES DEL MOTOR
 // =========================================================
 
-export function runSchedulerTests() {
+/*export function runSchedulerTests() {
   const agents = [
     { id: 1, name: "Juan" },
     { id: 2, name: "Pedro" },
@@ -445,7 +445,7 @@ export function runSchedulerTests() {
 
   return { test1, test2, test3, test4, test5 };
 }
-
+*/
 // =========================================================
 // COMPONENTE REACT
 // (sin cambios de UI respecto del original â€” solo consume el motor)
