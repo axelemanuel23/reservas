@@ -344,10 +344,14 @@ function pickNextFlexibleAgent(agents, targets, current) {
     return { agent: continuing, remaining: targets.get(continuing.id) - continuing.minutes };
   }
 
+  // Orden de llegada estricto: sigue el agente con menor ID que todavía
+  // necesite minutos, sin importar cuántos necesite. Si le toca a alguien
+  // que necesita mucho (ej. porque quedó afuera de los bloques rígidos),
+  // se lleva ese tramo completo antes de pasarle la posta al siguiente.
   const stillNeeding = agents
     .map((agent) => ({ agent, remaining: targets.get(agent.id) - agent.minutes }))
     .filter((item) => item.remaining > 0)
-    .sort((a, b) => (b.remaining !== a.remaining ? b.remaining - a.remaining : a.agent.id - b.agent.id));
+    .sort((a, b) => a.agent.id - b.agent.id);
 
   if (stillNeeding.length > 0) return stillNeeding[0];
 
@@ -646,7 +650,69 @@ export function runSchedulerTests() {
     "TEST 3: los turnos de cada agente deben quedar ordenados cronológicamente."
   );
 
-  return { test1, test2, test2b };
+  // TEST 3
+  // Escenario "Guardia Nocturna" reportado: 00:00-01:00 (2 casillas
+  // Entrada), 01:00-05:00 (1 casilla flexible), 05:00-06:00 (3 casillas
+  // Salida), 6 agentes. Carlos queda afuera de ambos bloques rígidos y
+  // necesita 90 min en el tramo flexible, pero el orden de llegada debe
+  // respetarse igual: Juan, Pedro, Carlos, Luis, Miguel, Agente 6 — cada
+  // uno toma lo que le falta cuando le toca el turno, sin saltarse a
+  // nadie por tener más o menos minutos pendientes.
+  const agents3 = [
+    { id: 1, name: "Juan" },
+    { id: 2, name: "Pedro" },
+    { id: 3, name: "Carlos" },
+    { id: 4, name: "Luis" },
+    { id: 5, name: "Miguel" },
+    { id: 6, name: "Agente 6" },
+  ];
+
+  const test3 = generateSchedule(agents3, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "01:00",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "01:00", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+      ],
+    },
+  ]);
+
+  console.assert(!test3.error, "TEST 3: no debería haber error.");
+
+  const expectedTest3 = [
+    { id: 1, start: 60, end: 90 }, // Juan 01:00-01:30
+    { id: 2, start: 90, end: 120 }, // Pedro 01:30-02:00
+    { id: 3, start: 120, end: 210 }, // Carlos 02:00-03:30
+    { id: 4, start: 210, end: 240 }, // Luis 03:30-04:00
+    { id: 5, start: 240, end: 270 }, // Miguel 04:00-04:30
+    { id: 6, start: 270, end: 300 }, // Agente 6 04:30-05:00
+  ];
+
+  for (const expected of expectedTest3) {
+    const agent = test3.schedule.find((a) => a.id === expected.id);
+    const found = agent.assignments.some(
+      (a) => a.start === expected.start && a.end === expected.end
+    );
+    console.assert(
+      found,
+      `TEST 3: ${agent.name} debería tener un tramo ${minutesToTime(expected.start)} → ${minutesToTime(expected.end)}.`
+    );
+  }
+
+  return { test1, test2, test2b, test3 };
 }
 
 // =========================================================
@@ -688,7 +754,6 @@ function BoothPicker({ sector, count, selected, onToggle }) {
     </div>
   );
 }
-
 function generatePlainTextSchedule(schedule) {
   // Obtener todos los puntos donde comienza o termina algún turno.
   const timePoints = [
@@ -830,7 +895,7 @@ export default function App() {
     alert("No se pudo copiar el horario.");
   }
 }
-
+  
   return (
     <div className="app">
       <div className="container">
@@ -1006,7 +1071,7 @@ export default function App() {
   >
     📋 Copiar horario para mensaje
   </button>
-</div>
+</div>  
           </section>
         )}
       </div>
