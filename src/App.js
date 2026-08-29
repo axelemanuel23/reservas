@@ -842,6 +842,7 @@ function generatePlainTextSchedule(schedule) {
   }
 
   return lines.join("\n");
+}
 
 export default function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
@@ -889,18 +890,16 @@ export default function App() {
   }
 
   async function copyPlainTextSchedule() {
-  if (!result.schedule?.length) return;
-
-  const text = generatePlainTextSchedule(result.schedule);
-
-  try {
-    await navigator.clipboard.writeText(text);
-    alert("Horario copiado al portapapeles.");
-  } catch (error) {
-    console.error("No se pudo copiar el horario:", error);
-    alert("No se pudo copiar el horario.");
+    if (!result.schedule?.length) return;
+    const text = generatePlainTextSchedule(result.schedule);
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("Horario copiado al portapapeles.");
+    } catch (error) {
+      console.error("No se pudo copiar el horario:", error);
+      alert("No se pudo copiar el horario.");
+    }
   }
-}
   
   return (
     <div className="app">
