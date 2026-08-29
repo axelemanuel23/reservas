@@ -829,7 +829,7 @@ function generatePlainTextSchedule(schedule) {
     }
   }
 
-  const lines = ["Guardia Nocturna"];
+  const lines = ["Guardia Nocturna","Hora -> Agente|Casilla"];
 
   for (const row of mergedRows) {
     const time = `${minutesToShortTime(row.start)}-${minutesToShortTime(row.end)}`;
