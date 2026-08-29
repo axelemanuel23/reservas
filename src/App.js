@@ -52,7 +52,13 @@ function sortBoothsForAssignment(booths) {
   return [...entrada, ...salida];
 }
 
-const INITIAL_AGENTS = [];
+const INITIAL_AGENTS = [
+  { id: 1, name: "Juan" },
+  { id: 2, name: "Pedro" },
+  { id: 3, name: "Carlos" },
+  { id: 4, name: "Luis" },
+  { id: 5, name: "Miguel" },
+];
 
 const INITIAL_DEMAND = [
   {
@@ -60,24 +66,24 @@ const INITIAL_DEMAND = [
     start: "00:00",
     end: "01:00",
     booths: [
-      { sector: "entrada", numero: 12 },
-      { sector: "entrada", numero: 16 },
+      { sector: "entrada", numero: 1 },
+      { sector: "entrada", numero: 2 },
     ],
   },
   {
     id: 2,
     start: "01:00",
     end: "05:00",
-    booths: [{ sector: "entrada", numero: 16 }],
+    booths: [{ sector: "entrada", numero: 1 }],
   },
   {
     id: 3,
     start: "05:00",
     end: "06:00",
     booths: [
-      { sector: "salida", numero: 5 },
-      { sector: "salida", numero: 6 },
-      { sector: "salida", numero: 7 },
+      { sector: "salida", numero: 1 },
+      { sector: "salida", numero: 2 },
+      { sector: "salida", numero: 3 },
     ],
   },
 ];
@@ -191,11 +197,13 @@ function calculateTotalWork(demand) {
 // "preferencial".
 // =========================================================
 
-function pickLeastLoaded(agents, loadOf, quantity) {
+function pickLeastLoaded(agents, loadOf, quantity, tieBreak = "asc") {
+  const tieBreakSign = tieBreak === "desc" ? -1 : 1;
+
   return [...agents]
     .sort((a, b) => {
       const diff = loadOf(a) - loadOf(b);
-      return diff !== 0 ? diff : a.id - b.id;
+      return diff !== 0 ? diff : tieBreakSign * (a.id - b.id);
     })
     .slice(0, quantity);
 }
@@ -255,28 +263,48 @@ function planRigidBlocks(agents, rigidIntervals) {
   const rigidMinutes = new Map(agents.map((agent) => [agent.id, 0]));
   const plan = [];
 
-  for (const interval of rigidIntervals) {
+  // En la práctica no se dan bloques rígidos "en el medio" del día, así
+  // que la única inversión de desempate que hace falta es la del último
+  // bloque cronológico: cuando hay empate en carga acumulada, ese bloque
+  // favorece a los IDs más altos en vez de a los más bajos. Todo lo demás
+  // sigue el criterio único (menor carga, menor ID).
+  const lastRigidIndex = rigidIntervals.length - 1;
+
+  rigidIntervals.forEach((interval, index) => {
     const start = timeToMinutes(interval.start);
     const end = timeToMinutes(interval.end);
     const duration = end - start;
+    const isLastOfSeveral = rigidIntervals.length > 1 && index === lastRigidIndex;
+    const tieBreak = isLastOfSeveral ? "desc" : "asc";
 
-    // Orden de prioridad: menor carga rígida acumulada, empate por ID.
+    // Orden de prioridad: menor carga rígida acumulada, empate por ID
+    // (invertido solo si este es el último bloque rígido del día, y
+    // solo para decidir A QUIÉN se elige entre los empatados).
     const selected = pickLeastLoaded(
       agents,
       (agent) => rigidMinutes.get(agent.id),
-      interval.booths.length
-    );
+      interval.booths.length,
+      tieBreak
+    )
+      // El reparto de casillas dentro del grupo elegido siempre sigue
+      // el criterio normal (menor carga, menor ID) independientemente
+      // de qué desempate se usó para elegir al grupo: el sesgo de
+      // "quién recibe la casilla preferencial" no cambia.
+      .sort((a, b) => {
+        const diff = rigidMinutes.get(a.id) - rigidMinutes.get(b.id);
+        return diff !== 0 ? diff : a.id - b.id;
+      });
 
     // Orden de las casillas según el sesgo: Entrada (desc) antes que
     // Salida (asc). El agente más prioritario recibe la primera.
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
-    selected.forEach((agent, index) => {
-      const booth = orderedBooths[index];
+    selected.forEach((agent, boothIndex) => {
+      const booth = orderedBooths[boothIndex];
       plan.push({ agentId: agent.id, booth: boothLabel(booth), start, end });
       rigidMinutes.set(agent.id, rigidMinutes.get(agent.id) + duration);
     });
-  }
+  });
 
   return { rigidMinutes, plan };
 }
@@ -541,6 +569,51 @@ export function runSchedulerTests() {
     "TEST 2: el segundo bloque rígido debe cubrirlo Carlos, Luis, Miguel y Diego."
   );
 
+  // TEST 2b — mismo escenario pero con el último bloque de solo 3
+  // casillas (no 4): al haber empate en carga (0) entre Carlos, Luis,
+  // Miguel y Diego, el último bloque rígido debe favorecer a los ID
+  // más altos, dejando a Carlos como el que hace el tramo flexible
+  // completo en vez de compartirlo.
+  const test2b = generateSchedule(agents, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "00:30",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+      ],
+    },
+  ]);
+
+  console.assert(!test2b.error, "TEST 2b: no debería haber error.");
+
+  const test2bRigid2 = test2b.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
+    .map((a) => a.id)
+    .sort();
+  console.assert(
+    JSON.stringify(test2bRigid2) === JSON.stringify([4, 5, 6]),
+    "TEST 2b: el último bloque (3 casillas) debe cubrirlo Luis, Miguel y Diego, no Carlos."
+  );
+
+  const test2bDiego = test2b.schedule.find((a) => a.id === 6);
+  console.assert(
+    test2bDiego.assignments.some((a) => a.booth === "Salida 3"),
+    "TEST 2b: Diego (ID más alto entre los empatados) debe quedar en Salida 3."
+  );
+
   // Reparto flexible esperado a mano: total = 570 min / 6 = 95 min c/u.
   // Juan y Pedro ya tienen 30 min de rígido, Carlos/Luis/Miguel/Diego
   // ya tienen 60 min. Juan sigue hasta 01:35, Pedro releva hasta 02:40,
@@ -573,7 +646,7 @@ export function runSchedulerTests() {
     "TEST 3: los turnos de cada agente deben quedar ordenados cronológicamente."
   );
 
-  return { test1, test2 };
+  return { test1, test2, test2b };
 }
 
 // =========================================================
@@ -614,89 +687,6 @@ function BoothPicker({ sector, count, selected, onToggle }) {
       </div>
     </div>
   );
-}
-
-function generatePlainTextSchedule(schedule) {
-  // Obtener todos los puntos donde comienza o termina algún turno.
-  const timePoints = [
-    ...new Set(
-      schedule.flatMap((agent) =>
-        agent.assignments.flatMap((assignment) => [
-          assignment.start,
-          assignment.end,
-        ])
-      )
-    ),
-  ].sort((a, b) => a - b);
-
-  const rows = [];
-
-  for (let i = 0; i < timePoints.length - 1; i++) {
-    const start = timePoints[i];
-    const end = timePoints[i + 1];
-
-    // Buscar todos los agentes que están trabajando durante este bloque.
-    const active = schedule
-      .map((agent) => {
-        const assignment = agent.assignments.find(
-          (a) => a.start <= start && a.end >= end
-        );
-
-        if (!assignment) return null;
-
-        return {
-          agent: agent.name,
-          booth: assignment.booth,
-        };
-      })
-      .filter(Boolean);
-
-    if (active.length === 0) continue;
-
-    // Si exactamente la misma asignación continúa, podemos fusionar
-    // posteriormente los bloques.
-    rows.push({
-      start,
-      end,
-      active,
-    });
-  }
-
-  // Fusionar intervalos consecutivos cuando tienen exactamente
-  // los mismos agentes/casillas.
-  const mergedRows = [];
-
-  for (const row of rows) {
-    const previous = mergedRows[mergedRows.length - 1];
-
-    const sameAssignments =
-      previous &&
-      JSON.stringify(previous.active) === JSON.stringify(row.active) &&
-      previous.end === row.start;
-
-    if (sameAssignments) {
-      previous.end = row.end;
-    } else {
-      mergedRows.push({ ...row });
-    }
-  }
-
-  const lines = [
-    "Horario Guardia Nocturna",
-    "Hora\t\tAgente-Casilla",
-  ];
-
-  for (const row of mergedRows) {
-    const time = `${minutesToTime(row.start)}-${minutesToTime(row.end)}`;
-
-    const assignments = row.active
-      .map(({ agent, booth }) => `${agent}-${booth}`)
-      .join(" / ");
-
-    lines.push(`${time} -> ${assignments}`);
-  }
-
-  return lines.join("\n");
 }
 
 export default function App() {
@@ -742,20 +732,6 @@ export default function App() {
         return { ...item, booths };
       })
     );
-  }
-
-  async function copyPlainTextSchedule() {
-    if (!result.schedule?.length) return;
-
-    const text = generatePlainTextSchedule(result.schedule);
-
-    try {
-      await navigator.clipboard.writeText(text);
-      alert("Horario copiado al portapapeles! Ya podes pegarlo y enviarlo via mensajeria interna ;)");
-    } catch (error) {
-      console.error("No se pudo copiar el horario:", error);
-      alert("No se pudo copiar el horario.");
-    }
   }
 
   return (
@@ -925,14 +901,6 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
-            </div>
-            <div style={{ marginTop: 20 }}>
-              <button
-                className="button button-primary"
-                onClick={copyPlainTextSchedule}
-               >
-                📋 Copiar horario para mensaje
-              </button>
             </div>
           </section>
         )}
