@@ -27,6 +27,16 @@ function boothLabel(booth) {
   return `${SECTOR_LABEL[booth.sector]} ${booth.numero}`;
 }
 
+function boothAbbrev(boothText) {
+  return boothText.replace("Entrada ", "E").replace("Salida ", "S");
+}
+
+function minutesToShortTime(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = (minutes % 60).toString().padStart(2, "0");
+  return `${hours}:${mins}`;
+}
+
 // =========================================================
 // SESGO DE ASIGNACIÓN POR SECTOR
 //
@@ -819,23 +829,19 @@ function generatePlainTextSchedule(schedule) {
     }
   }
 
-  const lines = [
-    "Horario Guardia Nocturna",
-    "Hora\t\tAgente\t\tCasilla",
-  ];
+  const lines = ["Guardia Nocturna"];
 
   for (const row of mergedRows) {
-    const time = `${minutesToTime(row.start)}-${minutesToTime(row.end)}`;
+    const time = `${minutesToShortTime(row.start)}-${minutesToShortTime(row.end)}`;
 
     const assignments = row.active
-      .map(({ agent, booth }) => `${agent}\t-\t${booth}`)
-      .join("\t/\t");
+      .map(({ agent, booth }) => `${agent}/${boothAbbrev(booth)}`)
+      .join("|");
 
-    lines.push(`${time}\t${assignments}`);
+    lines.push(`${time} ${assignments}`);
   }
 
   return lines.join("\n");
-}
 
 export default function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
