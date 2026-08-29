@@ -689,6 +689,89 @@ function BoothPicker({ sector, count, selected, onToggle }) {
   );
 }
 
+function generatePlainTextSchedule(schedule) {
+  // Obtener todos los puntos donde comienza o termina algún turno.
+  const timePoints = [
+    ...new Set(
+      schedule.flatMap((agent) =>
+        agent.assignments.flatMap((assignment) => [
+          assignment.start,
+          assignment.end,
+        ])
+      )
+    ),
+  ].sort((a, b) => a - b);
+
+  const rows = [];
+
+  for (let i = 0; i < timePoints.length - 1; i++) {
+    const start = timePoints[i];
+    const end = timePoints[i + 1];
+
+    // Buscar todos los agentes que están trabajando durante este bloque.
+    const active = schedule
+      .map((agent) => {
+        const assignment = agent.assignments.find(
+          (a) => a.start <= start && a.end >= end
+        );
+
+        if (!assignment) return null;
+
+        return {
+          agent: agent.name,
+          booth: assignment.booth,
+        };
+      })
+      .filter(Boolean);
+
+    if (active.length === 0) continue;
+
+    // Si exactamente la misma asignación continúa, podemos fusionar
+    // posteriormente los bloques.
+    rows.push({
+      start,
+      end,
+      active,
+    });
+  }
+
+  // Fusionar intervalos consecutivos cuando tienen exactamente
+  // los mismos agentes/casillas.
+  const mergedRows = [];
+
+  for (const row of rows) {
+    const previous = mergedRows[mergedRows.length - 1];
+
+    const sameAssignments =
+      previous &&
+      JSON.stringify(previous.active) === JSON.stringify(row.active) &&
+      previous.end === row.start;
+
+    if (sameAssignments) {
+      previous.end = row.end;
+    } else {
+      mergedRows.push({ ...row });
+    }
+  }
+
+  const lines = [
+    "Horario Guardia Nocturna",
+    "Hora\t\tAgente\t\tCasilla",
+  ];
+
+  for (const row of mergedRows) {
+    const time = `${minutesToTime(row.start)}-${minutesToTime(row.end)}`;
+
+    const assignments = row.active
+      .map(({ agent, booth }) => `${agent}\t-\t${booth}`)
+      .join("\t/\t");
+
+    lines.push(`${time}\t${assignments}`);
+  }
+
+  return lines.join("\n");
+}
+
 export default function App() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
   const [demand, setDemand] = useState(INITIAL_DEMAND);
@@ -733,6 +816,20 @@ export default function App() {
       })
     );
   }
+
+  async function copyPlainTextSchedule() {
+  if (!result.schedule?.length) return;
+
+  const text = generatePlainTextSchedule(result.schedule);
+
+  try {
+    await navigator.clipboard.writeText(text);
+    alert("Horario copiado al portapapeles.");
+  } catch (error) {
+    console.error("No se pudo copiar el horario:", error);
+    alert("No se pudo copiar el horario.");
+  }
+}
 
   return (
     <div className="app">
@@ -902,6 +999,14 @@ export default function App() {
                 </tbody>
               </table>
             </div>
+                    <div style={{ marginTop: 20 }}>
+  <button
+    className="button button-primary"
+    onClick={copyPlainTextSchedule}
+  >
+    📋 Copiar horario para mensaje
+  </button>
+</div>
           </section>
         )}
       </div>
