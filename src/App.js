@@ -62,39 +62,26 @@ function sortBoothsForAssignment(booths) {
   return [...entrada, ...salida];
 }
 
-const INITIAL_AGENTS = [
-  { id: 1, name: "Juan" },
-  { id: 2, name: "Pedro" },
-  { id: 3, name: "Carlos" },
-  { id: 4, name: "Luis" },
-  { id: 5, name: "Miguel" },
-];
+const INITIAL_AGENTS = [];
 
 const INITIAL_DEMAND = [
   {
     id: 1,
     start: "00:00",
     end: "01:00",
-    booths: [
-      { sector: "entrada", numero: 1 },
-      { sector: "entrada", numero: 2 },
-    ],
+    booths: [],
   },
   {
     id: 2,
     start: "01:00",
     end: "05:00",
-    booths: [{ sector: "entrada", numero: 1 }],
+    booths: [],
   },
   {
     id: 3,
     start: "05:00",
     end: "06:00",
-    booths: [
-      { sector: "salida", numero: 1 },
-      { sector: "salida", numero: 2 },
-      { sector: "salida", numero: 3 },
-    ],
+    booths: [],
   },
 ];
 
