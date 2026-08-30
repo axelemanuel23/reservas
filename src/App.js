@@ -62,7 +62,7 @@ function sortBoothsForAssignment(booths) {
   return [...entrada, ...salida];
 }
 
-const INITIAL_AGENTS = [];
+const INITIAL_AGENTS = [{}];
 
 const INITIAL_DEMAND = [
   {
