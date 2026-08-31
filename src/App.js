@@ -1324,23 +1324,22 @@ function handleDemandDragEnd() {
               <p className="card-description">El ID determina el orden de llegada.</p>
             </div>
           </div>
-
           <div className="agent-list">
             {agents.map((agent, index) => (
-  <div
-    key={agent.uid}
-    className="agent-row"
-    draggable
-    onDragStart={(event) => handleAgentDragStart(event, agent)}
-    onDragOver={handleAgentDragOver}
-    onDrop={(event) => handleAgentDrop(event, agent)}
-    onDragEnd={handleAgentDragEnd}
-    style={{
-      cursor: "grab",
-    }}
-  >
-    <div
-      className="agent-number"
+              <div
+                key={agent.uid}
+                className="agent-row"
+                draggable
+                onDragStart={(event) => handleAgentDragStart(event, agent)}
+                onDragOver={handleAgentDragOver}
+                onDrop={(event) => handleAgentDrop(event, agent)}
+                onDragEnd={handleAgentDragEnd}
+                style={{
+                  cursor: "grab",
+                }}
+              >
+                <div
+          className="agent-number"
       title="Arrastrar para cambiar el orden"
       aria-label={`Agente ${agent.id}. Arrastrar para cambiar el orden.`}
     >
@@ -1421,7 +1420,6 @@ function handleDemandDragEnd() {
             llega primero recibe la preferencial de cada sector (Entrada: mayor
             numeración primero; Salida: menor numeración primero).
           </p>
-
           <div className="demand-list">
             {demand.map((item) => (
               <div
@@ -1477,7 +1475,7 @@ function handleDemandDragEnd() {
                     aria-label={`Comienzo del intervalo ${item.id}`}
                   />
                   <span className="time-arrow">→</span>
-                    <input
+                  <input
                       ref={(element) => {
                         demandEndRefs.current[item.id] = element;
                       }}
@@ -1491,52 +1489,52 @@ function handleDemandDragEnd() {
                         handleDemandEndKeyDown(event, item)
                       }
                       aria-label={`Final del intervalo ${item.id}`}
-                    />
-                    <span style={{ fontSize: 12, color: "#777" }}>
+                  />
+                  <span style={{ fontSize: 12, color: "#777" }}>
                       {item.booths.length} casilla
                       {item.booths.length === 1 ? "" : "s"} seleccionada
                       {item.booths.length === 1 ? "" : "s"}
-                    </span>
-                    <button
+                  </span>
+                  <button
                       type="button"
                       className="button button-secondary"
                       onClick={() => moveDemand(item.id, -1)}
                       disabled={demand.indexOf(item) === 0}
                       aria-label={`Subir intervalo ${item.id}`}
-                    >
+                  >
                       ↑
-                    </button>
-                    <button
+                  </button>
+                  <button
                       type="button"
                       className="button button-secondary"
                       onClick={() => moveDemand(item.id, 1)}
                       disabled={demand.indexOf(item) === demand.length - 1}
                       aria-label={`Bajar intervalo ${item.id}`}
-                    >
+                  >
                       ↓
-                    </button>
-                    <button
+                  </button>
+                  <button
                       type="button"
                       className="button button-danger"
                       style={{ marginLeft: "auto" }}
                       onClick={() => removeDemand(item.id)}
-                    >
+                  >
                       Eliminar
-                    </button>
-                  </div>
-                  <span style={{ fontSize: 12, color: "#777" }}>
+                  </button>
+                </div>
+                <span style={{ fontSize: 12, color: "#777" }}>
                     {item.booths.length} casilla{item.booths.length === 1 ? "" : "s"} seleccionada
                     {item.booths.length === 1 ? "" : "s"}
-                  </span>
-                  <button
+                </span>
+                <button
                     className="button button-danger"
                     style={{ marginLeft: "auto" }}
                     onClick={() => removeDemand(item.id)}
-                  >
+                >
                     Eliminar
-                  </button>
-                </div>
-                <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
                   <BoothPicker
                     sector="entrada"
                     count={BOOTH_CATALOG.entrada}
@@ -1549,10 +1547,9 @@ function handleDemandDragEnd() {
                     selected={item.booths}
                     onToggle={(sector, numero) => toggleBooth(item.id, sector, numero)}
                   />
-                </div>
               </div>
-            ))}
-          </div>
+          ))}
+        </div>
           <button className="button button-secondary" onClick={addDemand}>
             + Agregar intervalo
           </button>
