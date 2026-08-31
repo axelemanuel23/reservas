@@ -256,50 +256,70 @@ function calculateTargets(agents, totalWork) {
 // procesan en el orden en que ocurren.
 // =========================================================
 
-function planRigidBlocks(agents, rigidIntervals) {
+function planRigidBlocks(agents, rigidIntervals, demand) {
   const rigidMinutes = new Map(agents.map((agent) => [agent.id, 0]));
   const plan = [];
 
-  // En la práctica no se dan bloques rígidos "en el medio" del día, así
-  // que la única inversión de desempate que hace falta es la del último
-  // bloque cronológico: cuando hay empate en carga acumulada, ese bloque
-  // favorece a los IDs más altos en vez de a los más bajos. Todo lo demás
-  // sigue el criterio único (menor carga, menor ID).
-  const lastRigidIndex = rigidIntervals.length - 1;
+  // Último momento en que termina cualquier intervalo de demanda.
+  const lastDemandEnd = Math.max(
+    ...demand.map((item) => timeToMinutes(item.end))
+  );
 
-  rigidIntervals.forEach((interval, index) => {
+  rigidIntervals.forEach((interval) => {
     const start = timeToMinutes(interval.start);
     const end = timeToMinutes(interval.end);
     const duration = end - start;
-    const isLastOfSeveral = rigidIntervals.length > 1 && index === lastRigidIndex;
-    const tieBreak = isLastOfSeveral ? "desc" : "asc";
 
-    // Orden de prioridad: menor carga rígida acumulada, empate por ID
-    // (invertido solo si este es el último bloque rígido del día, y
-    // solo para decidir A QUIÉN se elige entre los empatados).
+    // REGLA ESPECIAL:
+    //
+    // Si existe UN SOLO bloque rígido y ese bloque es el último
+    // intervalo del día, se asigna de ÚLTIMOS a PRIMEROS según ID.
+    //
+    // Ejemplo con IDs 1..6 y 3 casillas:
+    //   seleccionados: 6, 5, 4
+    //
+    // En cualquier otro caso se mantiene la regla normal:
+    //   menor carga, empate por menor ID.
+    const isUniqueLastRigid =
+      rigidIntervals.length === 1 && end === lastDemandEnd;
+
     const selected = pickLeastLoaded(
       agents,
       (agent) => rigidMinutes.get(agent.id),
       interval.booths.length,
-      tieBreak
-    )
-      // El reparto de casillas dentro del grupo elegido siempre sigue
-      // el criterio normal (menor carga, menor ID) independientemente
-      // de qué desempate se usó para elegir al grupo: el sesgo de
-      // "quién recibe la casilla preferencial" no cambia.
-      .sort((a, b) => {
-        const diff = rigidMinutes.get(a.id) - rigidMinutes.get(b.id);
-        return diff !== 0 ? diff : a.id - b.id;
-      });
+      isUniqueLastRigid ? "desc" : "asc"
+    );
 
-    // Orden de las casillas según el sesgo: Entrada (desc) antes que
-    // Salida (asc). El agente más prioritario recibe la primera.
+    // Para asignar las casillas mantenemos el criterio de prioridad
+    // habitual: menor carga rígida y, en empate, menor ID.
+    //
+    // Esto significa que, si el bloque especial seleccionó
+    // [6, 5, 4], el más prioritario de esos tres sigue siendo
+    // el ID 4 para efectos de la casilla preferencial.
+    selected.sort((a, b) => {
+      const diff = rigidMinutes.get(a.id) - rigidMinutes.get(b.id);
+      return diff !== 0 ? diff : a.id - b.id;
+    });
+
+    // Orden de casillas:
+    // Entrada → mayor numeración primero
+    // Salida  → menor numeración primero
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
     selected.forEach((agent, boothIndex) => {
       const booth = orderedBooths[boothIndex];
-      plan.push({ agentId: agent.id, booth: boothLabel(booth), start, end });
-      rigidMinutes.set(agent.id, rigidMinutes.get(agent.id) + duration);
+
+      plan.push({
+        agentId: agent.id,
+        booth: boothLabel(booth),
+        start,
+        end,
+      });
+
+      rigidMinutes.set(
+        agent.id,
+        rigidMinutes.get(agent.id) + duration
+      );
     });
   });
 
@@ -433,7 +453,7 @@ export function generateSchedule(agentsInput, demand) {
 
   // Fase 1: todos los bloques rígidos (2+ casillas), en orden cronológico.
   const rigidIntervals = sortedDemand.filter((item) => item.booths.length >= 2);
-  const { plan } = planRigidBlocks(agents, rigidIntervals);
+  const { plan } = planRigidBlocks(agents, rigidIntervals, sortedDemand);
   applyRigidPlan(agents, plan);
 
   // Fase 2: relleno flexible (1 casilla), en orden cronológico,
