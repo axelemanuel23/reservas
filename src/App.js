@@ -260,7 +260,7 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
   const rigidMinutes = new Map(agents.map((agent) => [agent.id, 0]));
   const plan = [];
 
-  // Último momento en que termina cualquier intervalo de demanda.
+  // Determinar cuándo termina el último intervalo de demanda.
   const lastDemandEnd = Math.max(
     ...demand.map((item) => timeToMinutes(item.end))
   );
@@ -270,40 +270,39 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
     const end = timeToMinutes(interval.end);
     const duration = end - start;
 
-    // REGLA ESPECIAL:
+    // REGLA:
+    // Si este bloque rígido termina al final de toda la demanda,
+    // se asigna de ÚLTIMOS a PRIMEROS.
     //
-    // Si existe UN SOLO bloque rígido y ese bloque es el último
-    // intervalo del día, se asigna de ÚLTIMOS a PRIMEROS según ID.
-    //
-    // Ejemplo con IDs 1..6 y 3 casillas:
-    //   seleccionados: 6, 5, 4
-    //
-    // En cualquier otro caso se mantiene la regla normal:
-    //   menor carga, empate por menor ID.
-    const isUniqueLastRigid =
-      rigidIntervals.length === 1 && end === lastDemandEnd;
+    // Todos los demás bloques rígidos siguen:
+    // menor carga → menor ID.
+    const isLastRigidBlock = end === lastDemandEnd;
 
     const selected = pickLeastLoaded(
       agents,
       (agent) => rigidMinutes.get(agent.id),
       interval.booths.length,
-      isUniqueLastRigid ? "desc" : "asc"
+      isLastRigidBlock ? "desc" : "asc"
     );
 
-    // Para asignar las casillas mantenemos el criterio de prioridad
-    // habitual: menor carga rígida y, en empate, menor ID.
+    // Ordenar para determinar quién recibe cada casilla.
     //
-    // Esto significa que, si el bloque especial seleccionó
-    // [6, 5, 4], el más prioritario de esos tres sigue siendo
-    // el ID 4 para efectos de la casilla preferencial.
+    // IMPORTANTE:
+    // La selección de agentes ya se hizo arriba.
+    // Para los bloques normales usamos la prioridad habitual.
+    // Para el bloque final mantenemos el orden invertido.
     selected.sort((a, b) => {
       const diff = rigidMinutes.get(a.id) - rigidMinutes.get(b.id);
-      return diff !== 0 ? diff : a.id - b.id;
+
+      if (diff !== 0) {
+        return diff;
+      }
+
+      return isLastRigidBlock
+        ? b.id - a.id
+        : a.id - b.id;
     });
 
-    // Orden de casillas:
-    // Entrada → mayor numeración primero
-    // Salida  → menor numeración primero
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
     selected.forEach((agent, boothIndex) => {
