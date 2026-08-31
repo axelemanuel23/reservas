@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
 // =========================================================
@@ -84,6 +84,10 @@ const INITIAL_DEMAND = [
     booths: [],
   },
 ];
+const STORAGE_KEYS = {
+  agents: "guardia-nocturna-agents",
+  demand: "guardia-nocturna-demand",
+};
 
 // =========================================================
 // UTILIDADES
@@ -269,26 +273,52 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
     const end = timeToMinutes(interval.end);
     const duration = end - start;
 
-    // El último bloque rígido del día se asigna de últimos
-    // a primeros según el orden de llegada.
+    // Es el último bloque rígido del día.
     const isLastRigidBlock = end === lastDemandEnd;
 
-    const selected = pickLeastLoaded(
-      agents,
-      (agent) => rigidMinutes.get(agent.id),
-      interval.booths.length,
-      isLastRigidBlock ? "desc" : "asc"
-    );
+    let selected;
 
-    // IMPORTANTE:
-    // NO volver a ordenar `selected`.
+    if (isLastRigidBlock) {
+      // =====================================================
+      // REGLA ESPECIAL DEL ÚLTIMO BLOQUE
+      //
+      // Acá NO importa la carga acumulada.
+      // Se asigna estrictamente de últimos a primeros:
+      //
+      // ID 6 → ID 5 → ID 4 → ID 3 → ID 2 → ID 1
+      //
+      // y se toman solamente los necesarios.
+      // =====================================================
+      selected = [...agents]
+        .sort((a, b) => b.id - a.id)
+        .slice(0, interval.booths.length);
+    } else {
+      // =====================================================
+      // BLOQUES RÍGIDOS NORMALES
+      //
+      // Se mantiene exactamente la regla original:
+      // menor carga rígida → menor ID.
+      // =====================================================
+      selected = pickLeastLoaded(
+        agents,
+        (agent) => rigidMinutes.get(agent.id),
+        interval.booths.length,
+        "asc"
+      );
+    }
+
+    // =====================================================
+    // CASILLAS
     //
-    // pickLeastLoaded ya devuelve:
-    // - bloques normales: menor carga → menor ID
-    // - último bloque: menor carga → mayor ID
+    // sortBoothsForAssignment ya contiene la prioridad:
     //
-    // Ese orden se utiliza directamente para emparejar
-    // agentes con casillas.
+    // Entrada: mayor numeración → menor numeración
+    // Salida:  menor numeración → mayor numeración
+    //
+    // NO ordenar `selected` después de esto.
+    // El orden de selected determina quién recibe
+    // la primera casilla preferencial.
+    // =====================================================
 
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
@@ -311,6 +341,7 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
 
   return { rigidMinutes, plan };
 }
+
 
 function applyRigidPlan(agents, plan) {
   for (const item of plan) {
@@ -838,9 +869,61 @@ function generatePlainTextSchedule(schedule) {
 }
 
 export default function App() {
-  const [agents, setAgents] = useState(INITIAL_AGENTS);
-  const [demand, setDemand] = useState(INITIAL_DEMAND);
+  const [agents, setAgents] = useState(() => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.agents);
+    return saved ? JSON.parse(saved) : INITIAL_AGENTS;
+  } catch (error) {
+    console.error("No se pudieron cargar los agentes:", error);
+    return INITIAL_AGENTS;
+  }
+});
 
+const [demand, setDemand] = useState(() => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.demand);
+    return saved ? JSON.parse(saved) : INITIAL_DEMAND;
+  } catch (error) {
+    console.error("No se pudo cargar la demanda:", error);
+    return INITIAL_DEMAND;
+  }
+});
+
+useEffect(() => {
+  try {
+    localStorage.setItem(
+      STORAGE_KEYS.agents,
+      JSON.stringify(agents)
+    );
+  } catch (error) {
+    console.error("No se pudieron guardar los agentes:", error);
+  }
+}, [agents]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem(
+      STORAGE_KEYS.demand,
+      JSON.stringify(demand)
+    );
+  } catch (error) {
+    console.error("No se pudo guardar la demanda:", error);
+  }
+}, [demand]);
+
+  function resetData() {
+  const confirmed = window.confirm(
+    "¿Querés borrar todos los agentes y horarios y volver a los valores iniciales?"
+  );
+
+  if (!confirmed) return;
+
+  localStorage.removeItem(STORAGE_KEYS.agents);
+  localStorage.removeItem(STORAGE_KEYS.demand);
+
+  setAgents(INITIAL_AGENTS);
+  setDemand(INITIAL_DEMAND);
+}
   const result = useMemo(() => generateSchedule(agents, demand), [agents, demand]);
 
   function addAgent() {
@@ -1069,6 +1152,13 @@ export default function App() {
   >
     📋 Copiar horario para mensaje
   </button>
+      <button
+  className="button button-danger"
+  onClick={resetData}
+>
+  🗑️ Restablecer datos
+</button>
+
 </div>  
           </section>
         )}
