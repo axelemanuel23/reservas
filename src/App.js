@@ -1534,20 +1534,6 @@ function handleDemandDragEnd() {
     Eliminar
   </button>
 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    className="input input-time"
-                    type="time"
-                    value={item.start}
-                    onChange={(event) => updateDemand(item.id, "start", event.target.value)}
-                  />
-                  <span className="time-arrow">→</span>
-                  <input
-                    className="input input-time"
-                    type="time"
-                    value={item.end}
-                    onChange={(event) => updateDemand(item.id, "end", event.target.value)}
-                  />
                   <span style={{ fontSize: 12, color: "#777" }}>
                     {item.booths.length} casilla{item.booths.length === 1 ? "" : "s"} seleccionada
                     {item.booths.length === 1 ? "" : "s"}
