@@ -273,32 +273,19 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
     const end = timeToMinutes(interval.end);
     const duration = end - start;
 
-    // Es el último bloque rígido del día.
+    // El último bloque rígido se selecciona de últimos a primeros.
     const isLastRigidBlock = end === lastDemandEnd;
 
     let selected;
 
     if (isLastRigidBlock) {
-      // =====================================================
-      // REGLA ESPECIAL DEL ÚLTIMO BLOQUE
-      //
-      // Acá NO importa la carga acumulada.
-      // Se asigna estrictamente de últimos a primeros:
-      //
-      // ID 6 → ID 5 → ID 4 → ID 3 → ID 2 → ID 1
-      //
-      // y se toman solamente los necesarios.
-      // =====================================================
+      // Seleccionamos los últimos agentes según ID.
       selected = [...agents]
         .sort((a, b) => b.id - a.id)
         .slice(0, interval.booths.length);
     } else {
-      // =====================================================
-      // BLOQUES RÍGIDOS NORMALES
-      //
-      // Se mantiene exactamente la regla original:
+      // Bloques normales:
       // menor carga rígida → menor ID.
-      // =====================================================
       selected = pickLeastLoaded(
         agents,
         (agent) => rigidMinutes.get(agent.id),
@@ -308,17 +295,29 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
     }
 
     // =====================================================
-    // CASILLAS
+    // IMPORTANTE:
     //
-    // sortBoothsForAssignment ya contiene la prioridad:
+    // La selección ya se hizo con la prioridad correspondiente.
+    // Ahora ordenamos los agentes de menor ID a mayor ID
+    // SOLO para emparejarlos con las casillas.
     //
-    // Entrada: mayor numeración → menor numeración
-    // Salida:  menor numeración → mayor numeración
+    // Las casillas ya vienen ordenadas por sector:
     //
-    // NO ordenar `selected` después de esto.
-    // El orden de selected determina quién recibe
-    // la primera casilla preferencial.
+    // Entrada → mayor número → menor número
+    // Salida  → menor número → mayor número
+    //
+    // Esto hace que:
+    //
+    // Salida 6,7,8
+    // Agente 3,4,5
+    //
+    // quede:
+    // Agente 3 → Salida 6
+    // Agente 4 → Salida 7
+    // Agente 5 → Salida 8
     // =====================================================
+
+    selected.sort((a, b) => a.id - b.id);
 
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
@@ -341,6 +340,7 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
 
   return { rigidMinutes, plan };
 }
+
 
 
 function applyRigidPlan(agents, plan) {
