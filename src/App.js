@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 // =========================================================
@@ -92,6 +92,41 @@ const STORAGE_KEYS = {
 // =========================================================
 // UTILIDADES
 // =========================================================
+function createUid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function normalizeAgents(savedAgents) {
+  return savedAgents.map((agent) => ({
+    ...agent,
+    uid: agent.uid || createUid(),
+  }));
+}
+
+function normalizeDemand(savedDemand) {
+  return savedDemand.map((item) => ({
+    ...item,
+    booths: Array.isArray(item.booths) ? item.booths : [],
+  }));
+}
+
+function renumberAgents(list) {
+  return list.map((agent, index) => ({
+    ...agent,
+    id: index + 1,
+  }));
+}
+
+function renumberDemand(list) {
+  return list.map((item, index) => ({
+    ...item,
+    id: index + 1,
+  }));
+}
 
 function timeToMinutes(time) {
   const [hours, minutes] = time.split(":").map(Number);
@@ -872,22 +907,50 @@ export default function App() {
   const [agents, setAgents] = useState(() => {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.agents);
-    return saved ? JSON.parse(saved) : INITIAL_AGENTS;
+
+    if (saved) {
+      return normalizeAgents(JSON.parse(saved));
+    }
+
+    return normalizeAgents(
+      INITIAL_AGENTS.map((agent) => ({
+        ...agent,
+        uid: createUid(),
+      }))
+    );
   } catch (error) {
     console.error("No se pudieron cargar los agentes:", error);
-    return INITIAL_AGENTS;
+
+    return normalizeAgents(
+      INITIAL_AGENTS.map((agent) => ({
+        ...agent,
+        uid: createUid(),
+      }))
+    );
   }
 });
 
 const [demand, setDemand] = useState(() => {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.demand);
-    return saved ? JSON.parse(saved) : INITIAL_DEMAND;
+
+    if (saved) {
+      return normalizeDemand(JSON.parse(saved));
+    }
+
+    return INITIAL_DEMAND;
   } catch (error) {
     console.error("No se pudo cargar la demanda:", error);
     return INITIAL_DEMAND;
   }
 });
+
+  const agentInputRefs = useRef({});
+const demandStartRefs = useRef({});
+const demandEndRefs = useRef({});
+
+const draggedAgentUid = useRef(null);
+const draggedDemandId = useRef(null);
 
 useEffect(() => {
   try {
@@ -921,36 +984,305 @@ useEffect(() => {
   localStorage.removeItem(STORAGE_KEYS.agents);
   localStorage.removeItem(STORAGE_KEYS.demand);
 
-  setAgents(INITIAL_AGENTS);
+ setAgents(
+  INITIAL_AGENTS.map((agent) => ({
+    ...agent,
+    uid: createUid(),
+  }))
+);
   setDemand(INITIAL_DEMAND);
 }
   const result = useMemo(() => generateSchedule(agents, demand), [agents, demand]);
 
-  function addAgent() {
-    const nextId = Math.max(0, ...agents.map((a) => a.id)) + 1;
-    setAgents([...agents, { id: nextId, name: `Agente ${nextId}` }]);
+  function focusAgent(uid) {
+  requestAnimationFrame(() => {
+    agentInputRefs.current[uid]?.focus();
+    agentInputRefs.current[uid]?.select();
+  });
+}
+
+function addAgent() {
+  const newAgent = {
+    uid: createUid(),
+    id: agents.length + 1,
+    name: `Agente ${agents.length + 1}`,
+  };
+
+  setAgents((current) => [...current, newAgent]);
+
+  focusAgent(newAgent.uid);
+}
+
+function removeAgent(id) {
+  setAgents((current) => {
+    const updated = current.filter((agent) => agent.id !== id);
+    return renumberAgents(updated);
+  });
+}
+
+function updateAgent(id, name) {
+  setAgents((current) =>
+    current.map((agent) =>
+      agent.id === id ? { ...agent, name } : agent
+    )
+  );
+}
+
+function handleAgentKeyDown(event, agent) {
+  if (event.key !== "Enter") return;
+
+  event.preventDefault();
+
+  const index = agents.findIndex((item) => item.uid === agent.uid);
+
+  // Enter en el último agente → crear uno nuevo.
+  if (index === agents.length - 1) {
+    addAgent();
+    return;
   }
 
-  function removeAgent(id) {
-    setAgents(agents.filter((agent) => agent.id !== id));
+  // Enter en un agente existente → siguiente agente.
+  const nextAgent = agents[index + 1];
+
+  focusAgent(nextAgent.uid);
+}
+
+  function reorderAgents(sourceUid, targetUid) {
+  if (!sourceUid || !targetUid || sourceUid === targetUid) return;
+
+  setAgents((current) => {
+    const sourceIndex = current.findIndex(
+      (agent) => agent.uid === sourceUid
+    );
+
+    const targetIndex = current.findIndex(
+      (agent) => agent.uid === targetUid
+    );
+
+    if (sourceIndex === -1 || targetIndex === -1) {
+      return current;
+    }
+
+    const updated = [...current];
+    const [moved] = updated.splice(sourceIndex, 1);
+
+    updated.splice(targetIndex, 0, moved);
+
+    return renumberAgents(updated);
+  });
+}
+
+function moveAgent(agentUid, direction) {
+  setAgents((current) => {
+    const index = current.findIndex(
+      (agent) => agent.uid === agentUid
+    );
+
+    if (index === -1) return current;
+
+    const targetIndex = index + direction;
+
+    if (targetIndex < 0 || targetIndex >= current.length) {
+      return current;
+    }
+
+    const updated = [...current];
+    [updated[index], updated[targetIndex]] = [
+      updated[targetIndex],
+      updated[index],
+    ];
+
+    return renumberAgents(updated);
+  });
+
+  requestAnimationFrame(() => {
+    agentInputRefs.current[agentUid]?.focus();
+  });
+}
+
+function handleAgentDragStart(event, agent) {
+  draggedAgentUid.current = agent.uid;
+
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", agent.uid);
+}
+
+function handleAgentDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+}
+
+function handleAgentDrop(event, targetAgent) {
+  event.preventDefault();
+
+  const sourceUid =
+    event.dataTransfer.getData("text/plain") ||
+    draggedAgentUid.current;
+
+  reorderAgents(sourceUid, targetAgent.uid);
+
+  draggedAgentUid.current = null;
+}
+
+function handleAgentDragEnd() {
+  draggedAgentUid.current = null;
+}
+
+  function focusDemandStart(id) {
+  requestAnimationFrame(() => {
+    demandStartRefs.current[id]?.focus();
+  });
+}
+
+function focusDemandEnd(id) {
+  requestAnimationFrame(() => {
+    demandEndRefs.current[id]?.focus();
+  });
+}
+
+function addDemand() {
+  const lastDemand = demand[demand.length - 1];
+
+  const newDemand = {
+    id: demand.length + 1,
+    start: lastDemand?.end || "00:00",
+    end: lastDemand?.end || "01:00",
+    booths: [],
+  };
+
+  setDemand((current) => [...current, newDemand]);
+
+  focusDemandStart(newDemand.id);
+}
+
+function removeDemand(id) {
+  setDemand((current) => {
+    const updated = current.filter((item) => item.id !== id);
+    return renumberDemand(updated);
+  });
+}
+
+function updateDemand(id, field, value) {
+  setDemand((current) =>
+    current.map((item) =>
+      item.id === id
+        ? { ...item, [field]: value }
+        : item
+    )
+  );
+}
+
+function handleDemandStartKeyDown(event, item) {
+  if (event.key !== "Enter") return;
+
+  event.preventDefault();
+
+  focusDemandEnd(item.id);
+}
+
+function handleDemandEndKeyDown(event, item) {
+  if (event.key !== "Enter") return;
+
+  event.preventDefault();
+
+  const index = demand.findIndex(
+    (current) => current.id === item.id
+  );
+
+  // Si no es la última demanda, ir a la siguiente.
+  if (index < demand.length - 1) {
+    focusDemandStart(demand[index + 1].id);
+    return;
   }
 
-  function updateAgent(id, name) {
-    setAgents(agents.map((agent) => (agent.id === id ? { ...agent, name } : agent)));
-  }
+  // Si es la última, crear otra.
+  addDemand();
+}
 
-  function addDemand() {
-    const nextId = Math.max(0, ...demand.map((d) => d.id)) + 1;
-    setDemand([...demand, { id: nextId, start: "00:00", end: "01:00", booths: [] }]);
-  }
+  function reorderDemand(sourceId, targetId) {
+  if (sourceId === targetId) return;
 
-  function removeDemand(id) {
-    setDemand(demand.filter((item) => item.id !== id));
-  }
+  setDemand((current) => {
+    const sourceIndex = current.findIndex(
+      (item) => item.id === sourceId
+    );
 
-  function updateDemand(id, field, value) {
-    setDemand(demand.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
-  }
+    const targetIndex = current.findIndex(
+      (item) => item.id === targetId
+    );
+
+    if (sourceIndex === -1 || targetIndex === -1) {
+      return current;
+    }
+
+    const updated = [...current];
+    const [moved] = updated.splice(sourceIndex, 1);
+
+    updated.splice(targetIndex, 0, moved);
+
+    return renumberDemand(updated);
+  });
+}
+
+function moveDemand(id, direction) {
+  setDemand((current) => {
+    const index = current.findIndex(
+      (item) => item.id === id
+    );
+
+    if (index === -1) return current;
+
+    const targetIndex = index + direction;
+
+    if (targetIndex < 0 || targetIndex >= current.length) {
+      return current;
+    }
+
+    const updated = [...current];
+
+    [updated[index], updated[targetIndex]] = [
+      updated[targetIndex],
+      updated[index],
+    ];
+
+    return renumberDemand(updated);
+  });
+
+  requestAnimationFrame(() => {
+    demandStartRefs.current[id]?.focus();
+  });
+}
+
+function handleDemandDragStart(event, item) {
+  draggedDemandId.current = item.id;
+
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData(
+    "text/plain",
+    String(item.id)
+  );
+}
+
+function handleDemandDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+}
+
+function handleDemandDrop(event, targetItem) {
+  event.preventDefault();
+
+  const sourceId = Number(
+    event.dataTransfer.getData("text/plain")
+  ) || draggedDemandId.current;
+
+  reorderDemand(sourceId, targetItem.id);
+
+  draggedDemandId.current = null;
+}
+
+function handleDemandDragEnd() {
+  draggedDemandId.current = null;
+}
 
   function toggleBooth(demandId, sector, numero) {
     setDemand(
@@ -994,19 +1326,85 @@ useEffect(() => {
           </div>
 
           <div className="agent-list">
-            {agents.map((agent) => (
-              <div key={agent.id} className="agent-row">
-                <div className="agent-number">{agent.id}</div>
-                <input
-                  className="input input-name"
-                  value={agent.name}
-                  onChange={(event) => updateAgent(agent.id, event.target.value)}
-                />
-                <button className="button button-danger" onClick={() => removeAgent(agent.id)}>
-                  Eliminar
-                </button>
-              </div>
-            ))}
+            {agents.map((agent, index) => (
+  <div
+    key={agent.uid}
+    className="agent-row"
+    draggable
+    onDragStart={(event) => handleAgentDragStart(event, agent)}
+    onDragOver={handleAgentDragOver}
+    onDrop={(event) => handleAgentDrop(event, agent)}
+    onDragEnd={handleAgentDragEnd}
+    style={{
+      cursor: "grab",
+    }}
+  >
+    <div
+      className="agent-number"
+      title="Arrastrar para cambiar el orden"
+      aria-label={`Agente ${agent.id}. Arrastrar para cambiar el orden.`}
+    >
+      ⋮⋮
+    </div>
+
+    <div
+      style={{
+        minWidth: 28,
+        textAlign: "center",
+        fontWeight: 700,
+      }}
+    >
+      {agent.id}
+    </div>
+
+    <input
+      ref={(element) => {
+        agentInputRefs.current[agent.uid] = element;
+      }}
+      className="input input-name"
+      value={agent.name}
+      placeholder={`Agente ${agent.id}`}
+      autoFocus={index === 0}
+      onChange={(event) =>
+        updateAgent(agent.id, event.target.value)
+      }
+      onKeyDown={(event) =>
+        handleAgentKeyDown(event, agent)
+      }
+      aria-label={`Nombre del agente ${agent.id}`}
+    />
+
+    <button
+      type="button"
+      className="button button-secondary"
+      onClick={() => moveAgent(agent.uid, -1)}
+      disabled={index === 0}
+      aria-label={`Subir agente ${agent.id}`}
+      title="Subir"
+    >
+      ↑
+    </button>
+
+    <button
+      type="button"
+      className="button button-secondary"
+      onClick={() => moveAgent(agent.uid, 1)}
+      disabled={index === agents.length - 1}
+      aria-label={`Bajar agente ${agent.id}`}
+      title="Bajar"
+    >
+      ↓
+    </button>
+
+    <button
+      type="button"
+      className="button button-danger"
+      onClick={() => removeAgent(agent.id)}
+    >
+      Eliminar
+    </button>
+  </div>
+))}
           </div>
 
           <button className="button button-primary" onClick={addAgent}>
@@ -1026,7 +1424,116 @@ useEffect(() => {
 
           <div className="demand-list">
             {demand.map((item) => (
-              <div key={item.id} className="demand-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+              <div
+  key={item.id}
+  className="demand-row"
+  draggable
+  onDragStart={(event) =>
+    handleDemandDragStart(event, item)
+  }
+  onDragOver={handleDemandDragOver}
+  onDrop={(event) =>
+    handleDemandDrop(event, item)
+  }
+  onDragEnd={handleDemandDragEnd}
+  style={{
+    flexDirection: "column",
+    alignItems: "stretch",
+    cursor: "grab",
+  }}
+>
+  <div
+  style={{
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  }}
+>
+  <div
+    style={{
+      fontWeight: 700,
+      minWidth: 28,
+      cursor: "grab",
+    }}
+    title="Arrastrar para cambiar el orden"
+    aria-label={`Intervalo ${item.id}. Arrastrar para cambiar el orden.`}
+  >
+    ⋮⋮
+  </div>
+
+  <strong style={{ minWidth: 24 }}>
+    {item.id}
+  </strong>
+
+  <input
+    ref={(element) => {
+      demandStartRefs.current[item.id] = element;
+    }}
+    className="input input-time"
+    type="time"
+    value={item.start}
+    onChange={(event) =>
+      updateDemand(item.id, "start", event.target.value)
+    }
+    onKeyDown={(event) =>
+      handleDemandStartKeyDown(event, item)
+    }
+    aria-label={`Comienzo del intervalo ${item.id}`}
+  />
+
+  <span className="time-arrow">→</span>
+
+  <input
+    ref={(element) => {
+      demandEndRefs.current[item.id] = element;
+    }}
+    className="input input-time"
+    type="time"
+    value={item.end}
+    onChange={(event) =>
+      updateDemand(item.id, "end", event.target.value)
+    }
+    onKeyDown={(event) =>
+      handleDemandEndKeyDown(event, item)
+    }
+    aria-label={`Final del intervalo ${item.id}`}
+  />
+
+  <span style={{ fontSize: 12, color: "#777" }}>
+    {item.booths.length} casilla
+    {item.booths.length === 1 ? "" : "s"} seleccionada
+    {item.booths.length === 1 ? "" : "s"}
+  </span>
+
+  <button
+    type="button"
+    className="button button-secondary"
+    onClick={() => moveDemand(item.id, -1)}
+    disabled={demand.indexOf(item) === 0}
+    aria-label={`Subir intervalo ${item.id}`}
+  >
+    ↑
+  </button>
+
+  <button
+    type="button"
+    className="button button-secondary"
+    onClick={() => moveDemand(item.id, 1)}
+    disabled={demand.indexOf(item) === demand.length - 1}
+    aria-label={`Bajar intervalo ${item.id}`}
+  >
+    ↓
+  </button>
+
+  <button
+    type="button"
+    className="button button-danger"
+    style={{ marginLeft: "auto" }}
+    onClick={() => removeDemand(item.id)}
+  >
+    Eliminar
+  </button>
+</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input
                     className="input input-time"
