@@ -260,7 +260,6 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
   const rigidMinutes = new Map(agents.map((agent) => [agent.id, 0]));
   const plan = [];
 
-  // Determinar cuándo termina el último intervalo de demanda.
   const lastDemandEnd = Math.max(
     ...demand.map((item) => timeToMinutes(item.end))
   );
@@ -270,12 +269,8 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
     const end = timeToMinutes(interval.end);
     const duration = end - start;
 
-    // REGLA:
-    // Si este bloque rígido termina al final de toda la demanda,
-    // se asigna de ÚLTIMOS a PRIMEROS.
-    //
-    // Todos los demás bloques rígidos siguen:
-    // menor carga → menor ID.
+    // El último bloque rígido del día se asigna de últimos
+    // a primeros según el orden de llegada.
     const isLastRigidBlock = end === lastDemandEnd;
 
     const selected = pickLeastLoaded(
@@ -285,23 +280,15 @@ function planRigidBlocks(agents, rigidIntervals, demand) {
       isLastRigidBlock ? "desc" : "asc"
     );
 
-    // Ordenar para determinar quién recibe cada casilla.
-    //
     // IMPORTANTE:
-    // La selección de agentes ya se hizo arriba.
-    // Para los bloques normales usamos la prioridad habitual.
-    // Para el bloque final mantenemos el orden invertido.
-    selected.sort((a, b) => {
-      const diff = rigidMinutes.get(a.id) - rigidMinutes.get(b.id);
-
-      if (diff !== 0) {
-        return diff;
-      }
-
-      return isLastRigidBlock
-        ? b.id - a.id
-        : a.id - b.id;
-    });
+    // NO volver a ordenar `selected`.
+    //
+    // pickLeastLoaded ya devuelve:
+    // - bloques normales: menor carga → menor ID
+    // - último bloque: menor carga → mayor ID
+    //
+    // Ese orden se utiliza directamente para emparejar
+    // agentes con casillas.
 
     const orderedBooths = sortBoothsForAssignment(interval.booths);
 
