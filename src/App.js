@@ -351,13 +351,6 @@ function getCompletedMinutes(agent) {
   return agent.minutes || 0;
 }
 
-function getUnreservedRemaining(agent, target) {
-  return Math.max(
-    0,
-    target - getCompletedMinutes(agent) - getReservedMinutes(agent)
-  );
-}
-
 function getProjectedLoad(agent) {
   return (
     getCompletedMinutes(agent) +
