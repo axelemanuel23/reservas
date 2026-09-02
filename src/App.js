@@ -259,14 +259,6 @@ function getAgentById(agents, id) {
   return agents.find((agent) => agent.id === id);
 }
 
-function getLastAssignment(agent) {
-  if (!agent.assignments || agent.assignments.length === 0) {
-    return null;
-  }
-
-  return [...agent.assignments].sort((a, b) => a.end - b.end).at(-1);
-}
-
 function hasOverlap(agent, start, end) {
   return agent.assignments.some(
     (assignment) =>
@@ -548,76 +540,6 @@ function getPlanningPriority(agent, targets) {
 //
 // =========================================================
 
-function pickAgentForFlexibleWork(
-  agents,
-  targets,
-  start,
-  end
-) {
-  const duration = end - start;
-
-  const candidates = agents
-    .filter((agent) =>
-      canWork(agent, start, end)
-    )
-    .map((agent) =>
-      getPlanningPriority(agent, targets)
-    );
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  // =======================================================
-  // PRIMERA PRIORIDAD:
-  // agentes para los cuales este tramo NO supera
-  // el objetivo.
-  // =======================================================
-
-  const withoutOverflow = candidates.filter(
-    ({ remaining }) =>
-      remaining >= duration
-  );
-
-  if (withoutOverflow.length > 0) {
-    return withoutOverflow.sort(
-      (a, b) => {
-        // Menor faltante primero.
-        if (a.remaining !== b.remaining) {
-          return a.remaining - b.remaining;
-        }
-
-        // Empate → orden de llegada.
-        return a.agent.id - b.agent.id;
-      }
-    )[0].agent;
-  }
-
-  // =======================================================
-  // SEGUNDA PRIORIDAD:
-  //
-  // Todos superarían el objetivo.
-  //
-  // Entonces elegimos al que quede MÁS CERCA del objetivo.
-  // =======================================================
-
-  return candidates.sort(
-    (a, b) => {
-      const overflowA =
-        duration - a.remaining;
-
-      const overflowB =
-        duration - b.remaining;
-
-      if (overflowA !== overflowB) {
-        return overflowA - overflowB;
-      }
-
-      return a.agent.id - b.agent.id;
-    }
-  )[0].agent;
-}
-
 
 // =========================================================
 // ASIGNACIÓN DE INTERVALO FLEXIBLE
@@ -639,16 +561,24 @@ function assignFlexibleInterval(
   targets
 ) {
   let current = timeToMinutes(interval.start);
-  const end = timeToMinutes(interval.end);
+  const intervalEnd = timeToMinutes(interval.end);
 
   const booth = boothLabel(interval.booths[0]);
 
-  while (current < end) {
-    const remainingInterval = end - current;
+  while (current < intervalEnd) {
+    const slotStart = current;
+    const slotEnd = intervalEnd;
+
+    const remainingInterval =
+      slotEnd - slotStart;
 
     const candidates = agents
       .filter((agent) =>
-        canWork(agent, current, end)
+        canWork(
+          agent,
+          slotStart,
+          slotEnd
+        )
       )
       .map((agent) => ({
         agent,
@@ -668,33 +598,55 @@ function assignFlexibleInterval(
     if (candidates.length > 0) {
       selected = candidates.sort(
         (a, b) => {
-          if (a.remaining !== b.remaining) {
-            return a.remaining - b.remaining;
+          if (
+            a.remaining !==
+            b.remaining
+          ) {
+            return (
+              a.remaining -
+              b.remaining
+            );
           }
 
-          return a.agent.id - b.agent.id;
+          return (
+            a.agent.id -
+            b.agent.id
+          );
         }
       )[0];
     } else {
-      // Si todos alcanzaron el objetivo pero la cobertura
-      // sigue siendo obligatoria, usamos al que tenga menor
-      // carga proyectada.
-      const fallback = agents
-        .filter((agent) =>
-          canWork(agent, current, end)
-        )
-        .sort(
-          (a, b) => {
-            const loadA = getProjectedLoad(a);
-            const loadB = getProjectedLoad(b);
+      const fallback =
+        agents
+          .filter((agent) =>
+            canWork(
+              agent,
+              slotStart,
+              slotEnd
+            )
+          )
+          .sort(
+            (a, b) => {
+              const loadA =
+                getProjectedLoad(a);
 
-            if (loadA !== loadB) {
-              return loadA - loadB;
+              const loadB =
+                getProjectedLoad(b);
+
+              if (
+                loadA !== loadB
+              ) {
+                return (
+                  loadA -
+                  loadB
+                );
+              }
+
+              return (
+                a.id -
+                b.id
+              );
             }
-
-            return a.id - b.id;
-          }
-        )[0];
+          )[0];
 
       if (!fallback) {
         break;
@@ -706,10 +658,11 @@ function assignFlexibleInterval(
       };
     }
 
-    const duration = Math.min(
-      selected.remaining,
-      remainingInterval
-    );
+    const duration =
+      Math.min(
+        selected.remaining,
+        remainingInterval
+      );
 
     if (duration <= 0) {
       break;
@@ -717,17 +670,18 @@ function assignFlexibleInterval(
 
     addAssignment(
       selected.agent,
-      current,
-      current + duration,
+      slotStart,
+      slotStart + duration,
       booth
     );
 
-    selected.agent.minutes += duration;
+    selected.agent.minutes +=
+      duration;
 
-    current += duration;
+    current =
+      slotStart + duration;
   }
 }
-
 
 // =========================================================
 // ASIGNACIÓN DE BLOQUE RÍGIDO NO FINAL
