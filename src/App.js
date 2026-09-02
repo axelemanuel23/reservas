@@ -219,48 +219,6 @@ function calculateTotalWork(demand) {
 }
 
 // =========================================================
-// CRITERIO ÚNICO DE PRIORIDAD
-//
-// Esta es la única regla de selección de todo el motor:
-//   1) menor cantidad de minutos acumulados hasta el momento
-//   2) a igualdad, menor ID (orden de llegada)
-//
-// Se usa tanto para elegir quién entra a un bloque rígido (varias
-// casillas simultáneas) como para elegir quién sigue en el relleno
-// flexible (una casilla). El mismo orden de prioridad es el que luego
-// se empareja con las casillas ordenadas por sector (ver
-// sortBoothsForAssignment): el más prioritario se lleva la casilla
-// "preferencial".
-// =========================================================
-
-function pickLeastLoaded(agents, loadOf, quantity, tieBreak = "asc") {
-  const tieBreakSign = tieBreak === "desc" ? -1 : 1;
-
-  return [...agents]
-    .sort((a, b) => {
-      const diff = loadOf(a) - loadOf(b);
-      return diff !== 0 ? diff : tieBreakSign * (a.id - b.id);
-    })
-    .slice(0, quantity);
-}
-
-function addAssignment(agent, start, end, booth) {
-  if (end <= start) return;
-
-  const last = agent.assignments[agent.assignments.length - 1];
-
-  // Si el turno nuevo continúa inmediatamente en la misma casilla,
-  // lo unimos en vez de crear un segmento aparte.
-  if (last && last.end === start && last.booth === booth) {
-    last.end = end;
-    last.minutes += end - start;
-    return;
-  }
-
-  agent.assignments.push({ start, end, booth, minutes: end - start });
-}
-
-// =========================================================
 // MOTOR NUEVO DE PLANIFICACIÓN
 //
 // Concepto:
