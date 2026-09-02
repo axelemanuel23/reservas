@@ -551,100 +551,103 @@ function assignFlexibleInterval(
 
   while (current < intervalEnd) {
     const slotStart = current;
-    const slotEnd = intervalEnd;
-
-    const remainingInterval =
-      slotEnd - slotStart;
 
     const candidates = agents
-      .filter((agent) =>
-        canWork(
+      .filter((agent) => {
+        return canWork(
           agent,
           slotStart,
-          slotEnd
-        )
-      )
-      .map((agent) => ({
-        agent,
-        remaining:
-          getUnreservedRemaining(
-            agent,
-            targets.get(agent.id)
-          ),
-      }))
+          intervalEnd
+        );
+      })
+      .map((agent) => {
+        const target =
+          targets.get(agent.id);
+
+        const completed =
+          getCompletedMinutes(agent);
+
+        const reserved =
+          getReservedMinutes(agent);
+
+        const pending =
+          Math.max(
+            0,
+            target -
+              completed -
+              reserved
+          );
+
+        return {
+          agent,
+          completed,
+          reserved,
+          pending,
+        };
+      })
       .filter(
-        ({ remaining }) =>
-          remaining > 0
+        ({ pending }) =>
+          pending > 0
       );
 
-    let selected;
-
-    if (candidates.length > 0) {
-      selected = candidates.sort(
-        (a, b) => {
-          if (
-            a.remaining !==
-            b.remaining
-          ) {
-            return (
-              a.remaining -
-              b.remaining
-            );
-          }
-
-          return (
-            a.agent.id -
-            b.agent.id
-          );
-        }
-      )[0];
-    } else {
-      const fallback =
-        agents
-          .filter((agent) =>
-            canWork(
-              agent,
-              slotStart,
-              slotEnd
-            )
-          )
-          .sort(
-            (a, b) => {
-              const loadA =
-                getProjectedLoad(a);
-
-              const loadB =
-                getProjectedLoad(b);
-
-              if (
-                loadA !== loadB
-              ) {
-                return (
-                  loadA -
-                  loadB
-                );
-              }
-
-              return (
-                a.id -
-                b.id
-              );
-            }
-          )[0];
-
-      if (!fallback) {
-        break;
-      }
-
-      selected = {
-        agent: fallback,
-        remaining: Infinity,
-      };
+    if (candidates.length === 0) {
+      break;
     }
 
+    // =====================================================
+    // PRIORIDAD DE PLANIFICACIÓN
+    //
+    // 1. Agentes SIN reserva futura.
+    // 2. Menor cantidad de minutos pendientes.
+    // 3. Menor ID.
+    //
+    // La reserva futura protege a los agentes que ya tienen
+    // trabajo comprometido en un bloque posterior.
+    // =====================================================
+
+    const unreserved =
+      candidates.filter(
+        ({ reserved }) =>
+          reserved === 0
+      );
+
+    const pool =
+      unreserved.length > 0
+        ? unreserved
+        : candidates;
+
+    pool.sort(
+      (a, b) => {
+        if (
+          a.pending !==
+          b.pending
+        ) {
+          return (
+            a.pending -
+            b.pending
+          );
+        }
+
+        return (
+          a.agent.id -
+          b.agent.id
+        );
+      }
+    );
+
+    const selected =
+      pool[0];
+
+    const remainingInterval =
+      intervalEnd -
+      slotStart;
+
+    // Nunca asignamos más de lo que el agente
+    // necesita para alcanzar su objetivo,
+    // salvo que no exista ninguna otra posibilidad.
     const duration =
       Math.min(
-        selected.remaining,
+        selected.pending,
         remainingInterval
       );
 
