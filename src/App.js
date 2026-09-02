@@ -974,6 +974,19 @@ export function generateSchedule(
 
   const maxMinutes =
     Math.max(...projectedLoads);
+const validationError =
+  validateGeneratedSchedule(
+    agents,
+    sortedDemand
+  );
+
+if (validationError) {
+  return {
+    error: validationError,
+    schedule: [],
+    stats: null,
+  };
+}
 
   // =======================================================
   // 6. ESTADÍSTICAS
@@ -1189,11 +1202,6 @@ export function generateFinalSchedule(
         interval.start
       );
 
-    const end =
-      timeToMinutes(
-        interval.end
-      );
-
     // El bloque final ya está reservado.
     if (
       finalRigid &&
@@ -1264,6 +1272,19 @@ export function generateFinalSchedule(
 
   const maxMinutes =
     Math.max(...loads);
+  const validationError =
+  validateGeneratedSchedule(
+    agents,
+    sortedDemand
+  );
+
+if (validationError) {
+  return {
+    error: validationError,
+    schedule: [],
+    stats: null,
+  };
+}
 
   return {
     error: null,
