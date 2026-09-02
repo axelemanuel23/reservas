@@ -507,22 +507,6 @@ function reserveFinalBlock(
 //
 // =========================================================
 
-function getPlanningPriority(agent, targets) {
-  const target = targets.get(agent.id);
-
-  const remaining = getUnreservedRemaining(
-    agent,
-    target
-  );
-
-  return {
-    agent,
-    remaining,
-    projectedLoad: getProjectedLoad(agent),
-  };
-}
-
-
 // =========================================================
 // SELECCIÓN DE AGENTE PARA CASILLA ÚNICA
 // =========================================================
