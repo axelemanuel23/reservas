@@ -219,1144 +219,809 @@ function calculateTotalWork(demand) {
 }
 
 // =========================================================
-// MOTOR NUEVO DE PLANIFICACIÓN
+// MOTOR DE PLANIFICACIÓN
 //
-// Concepto:
-//   1. Se calcula el trabajo total.
-//   2. Se determina un objetivo aproximado por agente.
-//   3. El último bloque rígido queda RESERVADO.
-//   4. El resto del trabajo se distribuye intentando cerrar
-//      agentes sin superar su objetivo.
-//   5. La prioridad NO es "menos minutos acumulados".
+// La planificación final separa dos conceptos:
 //
-// Prioridad de planificación:
+// 1) RESERVAS: bloques finales que no deben ser consumidos por la
+//    planificación flexible (por ejemplo 05:00 → 06:00 con 2 casillas).
 //
-//   a) No superar el objetivo si existe una alternativa.
-//   b) Proteger trabajo reservado.
-//   c) Priorizar al agente que está más cerca de cerrar su objetivo.
-//   d) En igualdad razonable, menor ID.
-//   e) Mantener las preferencias de casilla.
+// 2) ROTACIÓN: los bloques de varias casillas que no son finales se
+//    pueden rotar operativamente. La unidad de rotación preferida es
+//    60 minutos: no es un objetivo matemático, sino una regla operativa.
 //
-// IMPORTANTE:
-// El motor distingue:
-//
-//   minutos       = trabajo ya realizado
-//   reserved      = trabajo futuro comprometido
-//   remaining     = trabajo que todavía necesita
-//
+// 3) FLEXIBLE: una vez conocida la demanda completa, se calcula cuánto
+//    necesita cada agente para acercarse a su objetivo global, descontando
+//    las reservas futuras. Luego se entrega ese trabajo en orden de llegada,
+//    sin superar el objetivo salvo que sea inevitable.
 // =========================================================
 
+function pickLeastLoaded(agents, loadOf, quantity, tieBreak = "asc") {
+  const tieBreakSign = tieBreak === "desc" ? -1 : 1;
 
-// =========================================================
-// UTILIDADES DE ORDEN
-// =========================================================
-
-function sortAgentsById(agents) {
-  return [...agents].sort((a, b) => a.id - b.id);
+  return [...agents]
+    .sort((a, b) => {
+      const diff = loadOf(a) - loadOf(b);
+      return diff !== 0 ? diff : tieBreakSign * (a.id - b.id);
+    })
+    .slice(0, quantity);
 }
 
-function getAgentById(agents, id) {
-  return agents.find((agent) => agent.id === id);
+function addAssignment(agent, start, end, booth) {
+  if (end <= start) return;
+
+  const last = agent.assignments[agent.assignments.length - 1];
+
+  if (last && last.end === start && last.booth === booth) {
+    last.end = end;
+    last.minutes += end - start;
+    return;
+  }
+
+  agent.assignments.push({ start, end, booth, minutes: end - start });
 }
-
-function hasOverlap(agent, start, end) {
-  return agent.assignments.some(
-    (assignment) =>
-      assignment.start < end &&
-      assignment.end > start
-  );
-}
-
-function canWork(agent, start, end) {
-  return !hasOverlap(agent, start, end);
-}
-
-
-// =========================================================
-// OBJETIVOS
-// =========================================================
 
 function calculateTargets(agents, totalWork) {
-  const sorted = sortAgentsById(agents);
-
-  const base = Math.floor(totalWork / sorted.length);
-  const remainder = totalWork % sorted.length;
+  const sortedById = [...agents].sort((a, b) => a.id - b.id);
+  const base = Math.floor(totalWork / sortedById.length);
+  const remainder = totalWork % sortedById.length;
 
   return new Map(
-    sorted.map((agent, index) => [
+    sortedById.map((agent, index) => [
       agent.id,
       base + (index < remainder ? 1 : 0),
     ])
   );
 }
 
-
 // =========================================================
-// ASIGNACIONES
-// =========================================================
-
-function addAssignment(agent, start, end, booth) {
-  if (end <= start) return;
-
-  const assignments = agent.assignments || [];
-
-  // Si continúa inmediatamente en la misma casilla,
-  // fusionamos el tramo.
-  const last = assignments.at(-1);
-
-  if (
-    last &&
-    last.end === start &&
-    last.booth === booth
-  ) {
-    last.end = end;
-    last.minutes = last.end - last.start;
-    return;
-  }
-
-  assignments.push({
-    start,
-    end,
-    booth,
-    minutes: end - start,
-  });
-
-  agent.assignments = assignments;
-}
-
-
-// =========================================================
-// CARGA COMPROMETIDA
-// =========================================================
-//
-// Una reserva futura NO es lo mismo que minutos trabajados.
-//
-// Ejemplo:
-//
-// A5:
-//   minutos = 0
-//   reservados = 60
-//
-// Para llegar a objetivo 87:
-//
-//   faltante no reservado = 27
-//
+// IDENTIFICACIÓN DE RESERVAS
 // =========================================================
 
-function getReservedMinutes(agent) {
-  return agent.reservedMinutes || 0;
-}
-
-function getCompletedMinutes(agent) {
-  return agent.minutes || 0;
-}
-
-function getProjectedLoad(agent) {
-  return (
-    getCompletedMinutes(agent) +
-    getReservedMinutes(agent)
-  );
-}
-
-
-// =========================================================
-// RESERVA DEL ÚLTIMO BLOQUE RÍGIDO
-// =========================================================
-//
-// El último bloque rígido conocido es especial.
-//
-// Si tenemos:
-//
-// 00–01:40 → 2 casillas
-// 01:40–05  → 1 casilla
-// 05–06     → 2 casillas
-//
-// reservamos 05–06 para los últimos agentes:
-//
-// A5
-// A6
-//
-// No se consideran "0 minutos" desde el punto de vista
-// de la planificación.
-//
-// Se consideran:
-//
-// A5 = 0 realizados + 60 reservados
-// A6 = 0 realizados + 60 reservados
-//
-// =========================================================
-
-function findFinalRigidBlock(sortedDemand) {
-  const lastEnd = Math.max(
-    ...sortedDemand.map((item) =>
-      timeToMinutes(item.end)
-    )
+function getFinalRigidInterval(demand) {
+  const lastDemandEnd = Math.max(
+    ...demand.map((item) => timeToMinutes(item.end))
   );
 
-  const candidates = sortedDemand
-    .filter(
-      (item) =>
-        timeToMinutes(item.end) === lastEnd &&
-        item.booths.length >= 2
-    )
+  const candidate = [...demand]
+    .filter((item) => item.booths.length >= 2)
     .sort(
       (a, b) =>
-        timeToMinutes(a.start) -
-        timeToMinutes(b.start)
+        timeToMinutes(b.end) - timeToMinutes(a.end)
+    )
+    .find(
+      (item) =>
+        timeToMinutes(item.end) === lastDemandEnd
     );
 
-  return candidates.at(-1) || null;
-}
+  if (!candidate) return null;
 
-
-// =========================================================
-// RESERVAR BLOQUE FINAL
-// =========================================================
-
-function reserveFinalBlock(
-  agents,
-  interval,
-  targets
-) {
-  if (!interval) {
-    return {
-      reservedPlan: [],
-      reservedAgentIds: new Set(),
-    };
-  }
-
-  const start = timeToMinutes(interval.start);
-  const end = timeToMinutes(interval.end);
-
-  const orderedAgents = sortAgentsById(agents);
-
-  // El bloque final conserva la regla operacional existente:
-  //
-  // los últimos agentes cubren el bloque final.
-  //
-  const selected = orderedAgents
-    .slice(-interval.booths.length);
-
-  const orderedBooths =
-    sortBoothsForAssignment(interval.booths);
-
-  const reservedPlan = [];
-
-  selected
-    .sort((a, b) => a.id - b.id)
-    .forEach((agent, index) => {
-      const booth = orderedBooths[index];
-
-      const duration = end - start;
-
-      agent.reservedMinutes =
-        getReservedMinutes(agent) + duration;
-
-      reservedPlan.push({
-        agentId: agent.id,
-        booth: boothLabel(booth),
-        start,
-        end,
-      });
-    });
-
-  return {
-    reservedPlan,
-    reservedAgentIds: new Set(
-      selected.map((agent) => agent.id)
-    ),
-  };
-}
-
-
-// =========================================================
-// PRIORIDAD DE CIERRE
-// =========================================================
-//
-// Esta es una de las diferencias fundamentales respecto
-// del motor anterior.
-//
-// NO:
-//
-//   menor minutes acumulados
-//
-// SÍ:
-//
-//   menor cantidad de minutos NO RESERVADOS que necesita
-//   para llegar al objetivo.
-//
-// Ejemplo:
-//
-// objetivo = 87
-//
-// A1 = 60 → necesita 27
-// A3 = 40 → necesita 47
-// A5 = 0 + 60 reservados → necesita 27
-//
-// A5 NO gana automáticamente a A3 solamente por tener
-// 0 minutos realizados.
-//
-// La reserva futura ya forma parte de su objetivo.
-//
-// =========================================================
-
-// =========================================================
-// SELECCIÓN DE AGENTE PARA CASILLA ÚNICA
-// =========================================================
-//
-// La prioridad es:
-//
-// 1. agente que puede cerrar su objetivo exactamente
-//    o acercarse sin pasarlo;
-//
-// 2. menor faltante;
-//
-// 3. menor ID.
-//
-// La carga acumulada NO es el criterio principal.
-//
-// =========================================================
-
-
-// =========================================================
-// ASIGNACIÓN DE INTERVALO FLEXIBLE
-// =========================================================
-//
-// Una casilla puede ser repartida.
-//
-// No utilizamos simplemente:
-//
-//   "doy todo el bloque al primero"
-//
-// El tramo se corta cuando el agente llega a su objetivo.
-//
-// =========================================================
-
-function assignFlexibleInterval(
-  agents,
-  interval,
-  targets
-) {
-  let current = timeToMinutes(interval.start);
-  const intervalEnd = timeToMinutes(interval.end);
-
-  const booth = boothLabel(interval.booths[0]);
-
-  while (current < intervalEnd) {
-    const slotStart = current;
-
-    const candidates = agents
-      .filter((agent) => {
-        return canWork(
-          agent,
-          slotStart,
-          intervalEnd
-        );
-      })
-      .map((agent) => {
-        const target =
-          targets.get(agent.id);
-
-        const completed =
-          getCompletedMinutes(agent);
-
-        const reserved =
-          getReservedMinutes(agent);
-
-        const pending =
-          Math.max(
-            0,
-            target -
-              completed -
-              reserved
-          );
-
-        return {
-          agent,
-          completed,
-          reserved,
-          pending,
-        };
-      })
-      .filter(
-        ({ pending }) =>
-          pending > 0
-      );
-
-    if (candidates.length === 0) {
-      break;
-    }
-
-    // =====================================================
-    // PRIORIDAD DE PLANIFICACIÓN
-    //
-    // 1. Agentes SIN reserva futura.
-    // 2. Menor cantidad de minutos pendientes.
-    // 3. Menor ID.
-    //
-    // La reserva futura protege a los agentes que ya tienen
-    // trabajo comprometido en un bloque posterior.
-    // =====================================================
-
-    const unreserved =
-      candidates.filter(
-        ({ reserved }) =>
-          reserved === 0
-      );
-
-    const pool =
-      unreserved.length > 0
-        ? unreserved
-        : candidates;
-
-    pool.sort(
-      (a, b) => {
-        if (
-          a.pending !==
-          b.pending
-        ) {
-          return (
-            a.pending -
-            b.pending
-          );
-        }
-
-        return (
-          a.agent.id -
-          b.agent.id
-        );
-      }
-    );
-
-    const selected =
-      pool[0];
-
-    const remainingInterval =
-      intervalEnd -
-      slotStart;
-
-    // Nunca asignamos más de lo que el agente
-    // necesita para alcanzar su objetivo,
-    // salvo que no exista ninguna otra posibilidad.
-    const duration =
-      Math.min(
-        selected.pending,
-        remainingInterval
-      );
-
-    if (duration <= 0) {
-      break;
-    }
-
-    addAssignment(
-      selected.agent,
-      slotStart,
-      slotStart + duration,
-      booth
-    );
-
-    selected.agent.minutes +=
-      duration;
-
-    current =
-      slotStart + duration;
-  }
-}
-
-// =========================================================
-// ASIGNACIÓN DE BLOQUE RÍGIDO NO FINAL
-// =========================================================
-//
-// Los bloques rígidos que NO son el bloque final se
-// consideran trabajo real.
-//
-// Para seleccionar agentes utilizamos:
-//
-//   1. menor carga proyectada;
-//   2. menor ID.
-//
-// Pero NO se utiliza esta fase para decidir toda la noche.
-// El objetivo es registrar la carga comprometida.
-//
-// =========================================================
-
-function assignRigidInterval(
-  agents,
-  interval,
-  targets
-) {
-  const start = timeToMinutes(interval.start);
-  const end = timeToMinutes(interval.end);
-  const duration = end - start;
-
-  const available = agents.filter((agent) =>
-    canWork(agent, start, end)
+  // Un bloque multicasilla aislado no necesita tratamiento especial.
+  // La reserva final solo existe cuando hay trabajo anterior que pueda
+  // consumir minutos de los agentes que luego deben cubrir este bloque.
+  const candidateStart = timeToMinutes(candidate.start);
+  const hasPreviousDemand = demand.some(
+    (item) => timeToMinutes(item.start) < candidateStart
   );
 
-  if (
-    available.length <
-    interval.booths.length
-  ) {
-    return false;
+  return hasPreviousDemand ? candidate : null;
+}
+
+// =========================================================
+// FASE 1 — ROTACIÓN DE BLOQUES MULTICASILLA
+// =========================================================
+//
+// Los bloques multicasilla NO finales se rotan en unidades de hasta 60 min.
+//
+// Ejemplo 6 agentes / 2 casillas / 00:00 → 01:40:
+//
+// 00:00 → 01:00  A1 A2
+// 01:00 → 01:40  A3 A4
+//
+// Esto reproduce la idea operacional: quienes llegaron primero conservan
+// prioridad, pero no monopolizan la casilla durante todo el bloque.
+//
+// El último bloque multicasilla se considera RESERVA y se mantiene completo.
+// Los agentes elegidos son los de ID más alto, preservando la regla existente.
+// =========================================================
+
+function planMultiBoothBlocks(agents, demand) {
+  const plan = [];
+  const load = new Map(agents.map((agent) => [agent.id, 0]));
+  const finalRigid = getFinalRigidInterval(demand);
+
+  const intervals = [...demand]
+    .filter((item) => item.booths.length >= 2)
+    .sort(
+      (a, b) =>
+        timeToMinutes(a.start) - timeToMinutes(b.start) || a.id - b.id
+    );
+
+  for (const interval of intervals) {
+    const start = timeToMinutes(interval.start);
+    const end = timeToMinutes(interval.end);
+    const duration = end - start;
+    const isFinal = finalRigid && interval.id === finalRigid.id;
+    const booths = sortBoothsForAssignment(interval.booths);
+
+    if (isFinal) {
+      // Reserva final: no se fragmenta.
+      const selected = [...agents]
+        .sort((a, b) => b.id - a.id)
+        .slice(0, booths.length)
+        .sort((a, b) => a.id - b.id);
+
+      selected.forEach((agent, index) => {
+        plan.push({
+          agentId: agent.id,
+          booth: boothLabel(booths[index]),
+          start,
+          end,
+          final: true,
+        });
+        load.set(agent.id, load.get(agent.id) + duration);
+      });
+      continue;
+    }
+
+    // Rotación operacional: cada bloque de hasta 60 minutos selecciona
+    // los agentes menos cargados; en empate, menor ID.
+    let current = start;
+
+    while (current < end) {
+      const sliceEnd = Math.min(current + 60, end);
+      const sliceDuration = sliceEnd - current;
+
+      const selected = pickLeastLoaded(
+        agents,
+        (agent) => load.get(agent.id),
+        booths.length,
+        "asc"
+      ).sort((a, b) => a.id - b.id);
+
+      selected.forEach((agent, index) => {
+        plan.push({
+          agentId: agent.id,
+          booth: boothLabel(booths[index]),
+          start: current,
+          end: sliceEnd,
+          final: false,
+        });
+        load.set(agent.id, load.get(agent.id) + sliceDuration);
+      });
+
+      current = sliceEnd;
+    }
   }
 
-  const selected = available
+  return { plan, fixedMinutes: load, finalRigid };
+}
+
+function applyPlan(agents, plan) {
+  for (const item of plan) {
+    const agent = agents.find((candidate) => candidate.id === item.agentId);
+    if (!agent) continue;
+
+    addAssignment(agent, item.start, item.end, item.booth);
+    agent.minutes += item.end - item.start;
+  }
+}
+
+// =========================================================
+// FASE 2 — RESERVAS FUTURAS
+// =========================================================
+//
+// Para un agente que participa en el bloque final, esa carga ya está
+// comprometida. El flexible solamente puede asignarle lo que le falta
+// para llegar a su objetivo DESPUÉS de descontar esa reserva.
+// =========================================================
+
+function calculateReservedMinutes(agents, plan) {
+  const reserved = new Map(agents.map((agent) => [agent.id, 0]));
+
+  for (const item of plan) {
+    if (!item.final) continue;
+
+    reserved.set(
+      item.agentId,
+      reserved.get(item.agentId) + (item.end - item.start)
+    );
+  }
+
+  return reserved;
+}
+
+function calculateFlexibleAllocation(
+  agents,
+  flexibleWork,
+  targets,
+  fixedMinutes,
+  reservedMinutes
+) {
+  const allocation = new Map(agents.map((agent) => [agent.id, 0]));
+
+  const needs = agents.map((agent) => {
+    const target = targets.get(agent.id);
+    const fixed = fixedMinutes.get(agent.id) || 0;
+    const reserved = reservedMinutes.get(agent.id) || 0;
+    const workedBeforeFlexible = Math.max(0, fixed - reserved);
+
+    return {
+      agent,
+      target,
+      fixed: workedBeforeFlexible,
+      reserved,
+      need: Math.max(0, target - workedBeforeFlexible - reserved),
+    };
+  });
+
+  let remainingWork = flexibleWork;
+
+  // La prioridad NO es "quién tiene menos minutos".
+  // Es "quién llegó antes y todavía necesita minutos para alcanzar su
+  // objetivo, descontando lo que ya tiene reservado".
+  //
+  // Por eso, en el ejemplo:
+  // A1 → 27
+  // A2 → 27
+  // A3 → 47
+  // A4 → 47
+  // A5 → 27
+  // A6 → 27
+  //
+  // se procesa A1 → A2 → A3 → A4 → A5 → A6.
+  for (const item of needs.sort((a, b) => a.agent.id - b.agent.id)) {
+    if (remainingWork <= 0) break;
+
+    const available = Math.min(item.need, remainingWork);
+
+    allocation.set(item.agent.id, available);
+    remainingWork -= available;
+  }
+
+  // Si todavía queda trabajo después de que todos alcanzaron el objetivo,
+  // hay sobrecarga inevitable. Se reparte intentando minimizar la carga
+  // final, manteniendo ID como desempate.
+  while (remainingWork > 0) {
+    const candidates = agents
+      .map((agent) => ({
+        agent,
+        current:
+          (fixedMinutes.get(agent.id) || 0) +
+          (reservedMinutes.get(agent.id) || 0) +
+          (allocation.get(agent.id) || 0),
+      }))
+      .sort(
+        (a, b) =>
+          a.current - b.current || a.agent.id - b.agent.id
+      );
+
+    if (!candidates.length) break;
+
+    const selected = candidates[0].agent;
+    allocation.set(
+      selected.id,
+      allocation.get(selected.id) + 1
+    );
+    remainingWork -= 1;
+  }
+
+  return allocation;
+}
+
+// =========================================================
+// FASE 3 — INTERVALOS DE UNA CASILLA
+// =========================================================
+//
+// Ya NO se decide la cantidad de minutos durante el recorrido.
+// Primero calculateFlexibleAllocation() determina cuánto corresponde a
+// cada agente. Acá solamente convertimos esa cuota en horarios.
+//
+// La secuencia respeta ID. Si un agente llega al objetivo, pasa al siguiente.
+// =========================================================
+
+function buildFlexibleSchedule(agents, demand, allocation) {
+  const remaining = new Map(allocation);
+
+  const flexibleIntervals = [...demand]
+    .filter((item) => item.booths.length === 1)
     .sort(
-      (a, b) => {
-        const loadA =
-          getProjectedLoad(a);
-
-        const loadB =
-          getProjectedLoad(b);
-
-        if (loadA !== loadB) {
-          return loadA - loadB;
-        }
-
-        return a.id - b.id;
-      }
-    )
-    .slice(0, interval.booths.length);
-
-  const orderedAgents =
-    [...selected].sort(
-      (a, b) => a.id - b.id
+      (a, b) =>
+        timeToMinutes(a.start) - timeToMinutes(b.start) || a.id - b.id
     );
 
-  const orderedBooths =
-    sortBoothsForAssignment(
-      interval.booths
-    );
+  for (const interval of flexibleIntervals) {
+    let current = timeToMinutes(interval.start);
+    const end = timeToMinutes(interval.end);
+    const booth = boothLabel(interval.booths[0]);
 
-  orderedAgents.forEach(
-    (agent, index) => {
-      const booth = orderedBooths[index];
+    while (current < end) {
+      const candidates = agents
+        .filter((agent) => (remaining.get(agent.id) || 0) > 0)
+        .sort((a, b) => a.id - b.id);
+
+      if (!candidates.length) break;
+
+      const agent = candidates[0];
+      const duration = Math.min(
+        remaining.get(agent.id),
+        end - current
+      );
 
       addAssignment(
         agent,
-        start,
-        end,
-        boothLabel(booth)
+        current,
+        current + duration,
+        booth
       );
 
       agent.minutes += duration;
+      remaining.set(agent.id, remaining.get(agent.id) - duration);
+      current += duration;
     }
-  );
+  }
 
-  return true;
+  // Si por la forma de la demanda quedaron minutos flexibles sin asignar
+  // después de que todos alcanzaron su objetivo, los absorbemos en el
+  // agente de menor carga total, respetando ID como desempate.
+  return remaining;
 }
 
-
 // =========================================================
-// NORMALIZAR DEMANDA EN ORDEN CRONOLÓGICO
-// =========================================================
-
-function normalizeSortedDemand(demand) {
-  return [...demand].sort(
-    (a, b) => {
-      const startA =
-        timeToMinutes(a.start);
-
-      const startB =
-        timeToMinutes(b.start);
-
-      if (startA !== startB) {
-        return startA - startB;
-      }
-
-      return a.id - b.id;
-    }
-  );
-}
-
-
-// =========================================================
-// PLANIFICADOR COMPLETO
-// =========================================================
-//
-// Esta función reemplaza el antiguo:
-//
-//   planRigidBlocks()
-//   applyRigidPlan()
-//   assignFlexibleInterval()
-//
-// No hay:
-//
-//   "todos los rígidos primero y luego todos los flexibles".
-//
-// El trabajo se procesa cronológicamente.
-//
-// La única excepción deliberada es el bloque final:
-//
-//   ese bloque se reserva primero.
-//
+// VALIDACIÓN FINAL DEL SCHEDULE
 // =========================================================
 
-export function generateSchedule(
-  agentsInput,
-  demand
-) {
-  const error =
-    validateDemand(
-      agentsInput,
-      demand
-    );
-
-  if (error) {
-    return {
-      error,
-      schedule: [],
-      stats: null,
-    };
-  }
-
-  const agents =
-    agentsInput.map(
-      (agent) => ({
-        ...agent,
-        minutes: 0,
-        reservedMinutes: 0,
-        assignments: [],
-      })
-    );
-
-  const sortedDemand =
-    normalizeSortedDemand(demand);
-
-  const totalWork =
-    calculateTotalWork(
-      sortedDemand
-    );
-
-  const targets =
-    calculateTargets(
-      agents,
-      totalWork
-    );
-
-  // =======================================================
-  // 1. IDENTIFICAR Y RESERVAR EL BLOQUE FINAL
-  // =======================================================
-
-  const finalRigid =
-    findFinalRigidBlock(
-      sortedDemand
-    );
-
-  const {
-    reservedPlan,
-    reservedAgentIds,
-  } = reserveFinalBlock(
-    agents,
-    finalRigid,
-    targets
-  );
-
-  // =======================================================
-  // 2. PROCESAR LA DEMANDA REAL CRONOLÓGICAMENTE
-  //
-  // El bloque final no se vuelve a asignar.
-  // Los demás sí.
-  // =======================================================
-
-  for (const interval of sortedDemand) {
-    if (
-      finalRigid &&
-      interval.id === finalRigid.id
-    ) {
-      continue;
-    }
-
-    if (interval.booths.length === 1) {
-      assignFlexibleInterval(
-        agents,
-        interval,
-        targets
-      );
-
-      continue;
-    }
-
-    const success =
-      assignRigidInterval(
-        agents,
-        interval,
-        targets
-      );
-
-    if (!success) {
-      return {
-        error:
-          `No hay suficientes agentes disponibles para cubrir ` +
-          `${interval.start} → ${interval.end}.`,
-        schedule: [],
-        stats: null,
-      };
-    }
-  }
-
-  // =======================================================
-  // 3. MATERIALIZAR LAS RESERVAS
-  //
-  // Se agregan después de procesar el resto para no
-  // confundirlas con trabajo ya realizado.
-  // =======================================================
-
-  for (const item of reservedPlan) {
-    const agent =
-      getAgentById(
-        agents,
-        item.agentId
-      );
-
-    if (!agent) continue;
-
-    addAssignment(
-      agent,
-      item.start,
-      item.end,
-      item.booth
-    );
-
-    // IMPORTANTE:
-    // reservedMinutes YA fue contabilizado arriba.
-    // No lo sumamos nuevamente a minutes.
-  }
-
-  // =======================================================
-  // 4. ORDEN CRONOLÓGICO
-  // =======================================================
-
-  for (const agent of agents) {
-    agent.assignments.sort(
-      (a, b) => {
-        if (a.start !== b.start) {
-          return a.start - b.start;
-        }
-
-        return a.end - b.end;
-      }
-    );
-  }
-
-  // =======================================================
-  // 5. CARGA PROYECTADA
-  // =======================================================
-
-  const projectedLoads =
-    agents.map(
-      (agent) =>
-        getProjectedLoad(agent)
-    );
-
-  const minMinutes =
-    Math.min(...projectedLoads);
-
-  const maxMinutes =
-    Math.max(...projectedLoads);
-const validationError =
-  validateGeneratedSchedule(
-    agents,
-    sortedDemand
-  );
-
-if (validationError) {
-  return {
-    error: validationError,
-    schedule: [],
-    stats: null,
-  };
-}
-
-  // =======================================================
-  // 6. ESTADÍSTICAS
-  // =======================================================
-
-  return {
-    error: null,
-
-    schedule: agents,
-
-    stats: {
-      totalWork,
-
-      target:
-        totalWork /
-        agents.length,
-
-      minMinutes,
-
-      maxMinutes,
-
-      difference:
-        maxMinutes -
-        minMinutes,
-
-      targets:
-        Object.fromEntries(
-          targets
-        ),
-
-      projectedLoads:
-        Object.fromEntries(
-          agents.map(
-            (agent) => [
-              agent.id,
-              getProjectedLoad(agent),
-            ]
-          )
-        ),
-
-      reserved:
-        Object.fromEntries(
-          agents.map(
-            (agent) => [
-              agent.id,
-              getReservedMinutes(agent),
-            ]
-          )
-        ),
-    },
-
-    meta: {
-      finalRigidBlock:
-        finalRigid
-          ? {
-              id: finalRigid.id,
-              start: finalRigid.start,
-              end: finalRigid.end,
-              booths:
-                finalRigid.booths,
-            }
-          : null,
-
-      reservedAgentIds:
-        [...reservedAgentIds],
-    },
-  };
-}
-
-
-// =========================================================
-// PLANIFICADOR FINAL A PARTIR DE UNA SITUACIÓN REAL
-// =========================================================
-//
-// Esta función es la pieza que vamos a utilizar cuando
-// implementemos el modo operativo.
-//
-// Permite decir:
-//
-// "Esto es lo que REALMENTE ocurrió hasta las 01:40."
-//
-// Ejemplo:
-//
-// A1 = 60
-// A2 = 60
-// A3 = 40
-// A4 = 40
-// A5 = 0
-// A6 = 0
-//
-// y:
-//
-// A5/A6 tienen 60 minutos reservados 05–06.
-//
-// El motor NO vuelve a inventar lo ocurrido.
-// Parte de esa realidad.
-//
-// =========================================================
-
-export function generateFinalSchedule(
-  agentsInput,
-  demand,
-  actualState
-) {
-  const error =
-    validateDemand(
-      agentsInput,
-      demand
-    );
-
-  if (error) {
-    return {
-      error,
-      schedule: [],
-      stats: null,
-    };
-  }
-
-  const agents =
-    agentsInput.map(
-      (agent) => {
-        const state =
-          actualState?.[agent.id] ||
-          {};
-
-        return {
-          ...agent,
-
-          minutes:
-            Number(
-              state.minutes || 0
-            ),
-
-          reservedMinutes:
-            Number(
-              state.reservedMinutes || 0
-            ),
-
-          assignments:
-            Array.isArray(
-              state.assignments
-            )
-              ? state.assignments.map(
-                  (assignment) => ({
-                    ...assignment,
-                  })
-                )
-              : [],
-        };
-      }
-    );
-
-  const sortedDemand =
-    normalizeSortedDemand(demand);
-
-  const totalWork =
-    calculateTotalWork(
-      sortedDemand
-    );
-
-  const targets =
-    calculateTargets(
-      agents,
-      totalWork
-    );
-
-  // -------------------------------------------------------
-  // Determinamos cuánto trabajo ya está realizado.
-  //
-  // El trabajo reservado NO se vuelve a contabilizar.
-  // -------------------------------------------------------
-
-  for (const agent of agents) {
-    agent.minutes =
-      agent.assignments.reduce(
-        (total, assignment) =>
-          total +
-          (
-            assignment.minutes ??
-            (
-              assignment.end -
-              assignment.start
-            )
-          ),
-        0
-      );
-  }
-
-  // -------------------------------------------------------
-  // Si el estado real ya contiene reservas, las respetamos.
-  // -------------------------------------------------------
-
-  const finalRigid =
-    findFinalRigidBlock(
-      sortedDemand
-    );
-
-  const finalStart =
-    finalRigid
-      ? timeToMinutes(
-          finalRigid.start
-        )
-      : null;
-
-  // -------------------------------------------------------
-  // El trabajo que queda antes del bloque final se planifica
-  // usando la carga REAL.
-  // -------------------------------------------------------
-
-  for (const interval of sortedDemand) {
-    const start =
-      timeToMinutes(
-        interval.start
-      );
-
-    // El bloque final ya está reservado.
-    if (
-      finalRigid &&
-      interval.id === finalRigid.id
-    ) {
-      continue;
-    }
-
-    // No reconstruimos acontecimientos anteriores al
-    // momento indicado por el estado real.
-    //
-    // Si ya existen assignments allí, simplemente quedan.
-    if (
-      finalStart !== null &&
-      start >= finalStart
-    ) {
-      continue;
-    }
-
-    if (
-      interval.booths.length === 1
-    ) {
-      assignFlexibleInterval(
-        agents,
-        interval,
-        targets
-      );
-    } else {
-      const success =
-        assignRigidInterval(
-          agents,
-          interval,
-          targets
-        );
-
-      if (!success) {
-        return {
-          error:
-            `No se puede completar la planificación ` +
-            `del intervalo ${interval.start} → ${interval.end}.`,
-          schedule: [],
-          stats: null,
-        };
-      }
-    }
-  }
-
-  // -------------------------------------------------------
-  // Orden final
-  // -------------------------------------------------------
-
-  for (const agent of agents) {
-    agent.assignments.sort(
-      (a, b) =>
-        a.start - b.start
-    );
-  }
-
-  const loads =
-    agents.map(
-      (agent) =>
-        agent.minutes +
-        agent.reservedMinutes
-    );
-
-  const minMinutes =
-    Math.min(...loads);
-
-  const maxMinutes =
-    Math.max(...loads);
-  const validationError =
-  validateGeneratedSchedule(
-    agents,
-    sortedDemand
-  );
-
-if (validationError) {
-  return {
-    error: validationError,
-    schedule: [],
-    stats: null,
-  };
-}
-
-  return {
-    error: null,
-
-    schedule: agents,
-
-    stats: {
-      totalWork,
-
-      target:
-        totalWork /
-        agents.length,
-
-      minMinutes,
-
-      maxMinutes,
-
-      difference:
-        maxMinutes -
-        minMinutes,
-
-      targets:
-        Object.fromEntries(
-          targets
-        ),
-    },
-  };
-}
-
-
-// =========================================================
-// VALIDACIÓN FINAL
-// =========================================================
-
-function validateGeneratedSchedule(
-  agents,
-  demand
-) {
+function validateGeneratedSchedule(agents, demand) {
   for (const interval of demand) {
-    const start =
-      timeToMinutes(
-        interval.start
-      );
+    const start = timeToMinutes(interval.start);
+    const end = timeToMinutes(interval.end);
 
-    const end =
-      timeToMinutes(
-        interval.end
-      );
-
-    for (
-      let minute = start;
-      minute < end;
-      minute++
-    ) {
+    for (let minute = start; minute < end; minute++) {
       let activeCount = 0;
 
       for (const agent of agents) {
-        const active =
-          agent.assignments.filter(
-            (assignment) =>
-              assignment.start <= minute &&
-              assignment.end > minute
-          );
+        const active = agent.assignments.filter(
+          (a) => a.start <= minute && a.end > minute
+        );
 
         if (active.length > 1) {
-          return (
-            `El agente ${agent.name} ` +
-            `está asignado a más de una ` +
-            `casilla simultáneamente.`
-          );
+          return `El agente ${agent.name} está asignado a más de una casilla simultáneamente.`;
         }
 
-        activeCount +=
-          active.length;
+        activeCount += active.length;
       }
 
-      if (
-        activeCount !==
-        interval.booths.length
-      ) {
+      if (activeCount !== interval.booths.length) {
         return (
-          `La demanda ${interval.start} → ` +
-          `${interval.end} requiere ` +
-          `${interval.booths.length} casillas, ` +
-          `pero el minuto ${minutesToTime(minute)} ` +
-          `tiene ${activeCount} asignadas.`
+          `La demanda ${interval.start} → ${interval.end} requiere ${interval.booths.length} ` +
+          `casillas, pero el minuto ${minutesToTime(minute)} tiene ${activeCount} asignadas.`
         );
       }
     }
   }
 
   return null;
+}
+
+// =========================================================
+// GENERADOR PRINCIPAL
+// =========================================================
+
+export function generateSchedule(agentsInput, demand) {
+  const error = validateDemand(agentsInput, demand);
+  if (error) return { error, schedule: [], stats: null };
+
+  const agents = agentsInput.map((agent) => ({
+    ...agent,
+    minutes: 0,
+    assignments: [],
+  }));
+
+  const sortedDemand = [...demand].sort((a, b) => {
+    const startA = timeToMinutes(a.start);
+    const startB = timeToMinutes(b.start);
+    return startA !== startB ? startA - startB : a.id - b.id;
+  });
+
+  const totalWork = calculateTotalWork(sortedDemand);
+  const targets = calculateTargets(agents, totalWork);
+
+  // -------------------------------------------------------
+  // 1. Planificar multicasilla y reservas finales.
+  // -------------------------------------------------------
+  const {
+    plan: multiBoothPlan,
+    fixedMinutes,
+  } = planMultiBoothBlocks(agents, sortedDemand);
+
+  const reservedMinutes = calculateReservedMinutes(
+    agents,
+    multiBoothPlan
+  );
+
+  // -------------------------------------------------------
+  // 2. Aplicar primero esos turnos.
+  // -------------------------------------------------------
+  applyPlan(agents, multiBoothPlan);
+
+  // -------------------------------------------------------
+  // 3. Calcular cuánto trabajo flexible corresponde a cada agente.
+  // -------------------------------------------------------
+  const flexibleWork = sortedDemand
+    .filter((item) => item.booths.length === 1)
+    .reduce(
+      (total, item) =>
+        total +
+        timeToMinutes(item.end) -
+        timeToMinutes(item.start),
+      0
+    );
+
+  const allocation = calculateFlexibleAllocation(
+    agents,
+    flexibleWork,
+    targets,
+    fixedMinutes,
+    reservedMinutes
+  );
+
+  // -------------------------------------------------------
+  // 4. Convertir cuotas a horario.
+  // -------------------------------------------------------
+  buildFlexibleSchedule(
+    agents,
+    sortedDemand,
+    allocation
+  );
+
+  // -------------------------------------------------------
+  // 5. Orden cronológico.
+  // -------------------------------------------------------
+  for (const agent of agents) {
+    agent.assignments.sort((a, b) => a.start - b.start);
+  }
+
+  // -------------------------------------------------------
+  // 6. Validación.
+  // -------------------------------------------------------
+  const scheduleError = validateGeneratedSchedule(
+    agents,
+    sortedDemand
+  );
+
+  if (scheduleError) {
+    return {
+      error: scheduleError,
+      schedule: [],
+      stats: null,
+    };
+  }
+
+  const loads = agents.map((agent) => agent.minutes);
+  const minMinutes = Math.min(...loads);
+  const maxMinutes = Math.max(...loads);
+
+  return {
+    error: null,
+    schedule: agents,
+    stats: {
+      totalWork,
+      target: totalWork / agents.length,
+      minMinutes,
+      maxMinutes,
+      difference: maxMinutes - minMinutes,
+    },
+  };
+}
+
+// =========================================================
+// TEST 4 — ESCENARIO REAL DE PLANIFICACIÓN
+//
+// 00:00–01:40 → 2 casillas
+// 01:40–05:00 → 1 casilla
+// 05:00–06:00 → 2 casillas finales
+//
+// El primer bloque rota a la hora:
+// A1/A2 → 60 min
+// A3/A4 → 40 min
+//
+// El bloque final reserva 60 min para A5/A6.
+// El flexible completa el objetivo global por orden de llegada.
+// Resultado esperado: diferencia máxima de 1 minuto.
+// =========================================================
+
+function runPlanningRegressionTest() {
+  const testAgents = [1, 2, 3, 4, 5, 6].map((id) => ({
+    id,
+    name: `Agente ${id}`,
+  }));
+
+  const testDemand = [
+    {
+      id: 1,
+      start: "00:00",
+      end: "01:40",
+      booths: [
+        { sector: "entrada", numero: 16 },
+        { sector: "entrada", numero: 12 },
+      ],
+    },
+    {
+      id: 2,
+      start: "01:40",
+      end: "05:00",
+      booths: [{ sector: "entrada", numero: 16 }],
+    },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 7 },
+        { sector: "salida", numero: 8 },
+      ],
+    },
+  ];
+
+  const result = generateSchedule(testAgents, testDemand);
+
+  console.assert(!result.error, "TEST 4: no debería haber error.");
+  console.assert(
+    result.stats.difference <= 1,
+    "TEST 4: la diferencia final debería ser como máximo 1 minuto."
+  );
+
+  const loads = Object.fromEntries(
+    result.schedule.map((agent) => [agent.id, agent.minutes])
+  );
+
+  console.assert(
+    JSON.stringify(loads) ===
+      JSON.stringify({ 1: 87, 2: 87, 3: 87, 4: 87, 5: 86, 6: 86 }),
+    "TEST 4: distribución esperada 87/87/87/87/86/86."
+  );
+
+  return result;
+}
+
+// =========================================================
+// TESTS MANUALES DEL MOTOR
+// =========================================================
+
+export function runSchedulerTests() {
+  const agents = [
+    { id: 1, name: "Juan" },
+    { id: 2, name: "Pedro" },
+    { id: 3, name: "Carlos" },
+    { id: 4, name: "Luis" },
+    { id: 5, name: "Miguel" },
+    { id: 6, name: "Diego" },
+  ];
+
+  // TEST 1
+  // 2 casillas de Entrada durante una hora, arrancando todos en 0.
+  // Con el criterio único (menor carga, menor ID) deben entrar los DOS
+  // PRIMEROS por orden de llegada: Juan (1) y Pedro (2). Por el sesgo
+  // de Entrada (mayor a menor), Juan (más prioritario) debe quedar en
+  // la casilla de numeración más alta: Entrada 2.
+  const test1 = generateSchedule(agents, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "01:00",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+  ]);
+
+  console.assert(!test1.error, "TEST 1: no debería haber error.");
+
+  const test1Assignments = test1.schedule.flatMap((agent) =>
+    agent.assignments.map((a) => ({ agentId: agent.id, booth: a.booth }))
+  );
+
+  console.assert(
+    test1Assignments.some((item) => item.agentId === 1 && item.booth === "Entrada 2"),
+    "TEST 1: Juan debe estar en Entrada 2 (preferencial)."
+  );
+  console.assert(
+    test1Assignments.some((item) => item.agentId === 2 && item.booth === "Entrada 1"),
+    "TEST 1: Pedro debe estar en Entrada 1."
+  );
+
+  // TEST 2
+  // Escenario descrito por el usuario: 00→00:30 (2 casillas Entrada),
+  // 00:30→05:00 (1 casilla), 05:00→06:00 (4 casillas Salida), 6 agentes.
+  // Los primeros dos agentes cubren el primer bloque; como ya llegan
+  // "cargados" a las 05:00, el segundo bloque rígido lo cubren los
+  // últimos cuatro (inversa). Los minutos restantes se reparten por
+  // orden de llegada en el tramo flexible.
+  const test2 = generateSchedule(agents, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "00:30",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+        { sector: "salida", numero: 4 },
+      ],
+    },
+  ]);
+
+  console.assert(!test2.error, "TEST 2: no debería haber error.");
+
+  const test2Rigid1 = test2.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 0 && x.end === 30))
+    .map((a) => a.id)
+    .sort();
+  console.assert(
+    JSON.stringify(test2Rigid1) === JSON.stringify([1, 2]),
+    "TEST 2: el primer bloque rígido debe cubrirlo Juan y Pedro."
+  );
+
+  const test2Rigid2 = test2.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
+    .map((a) => a.id)
+    .sort();
+  console.assert(
+    JSON.stringify(test2Rigid2) === JSON.stringify([3, 4, 5, 6]),
+    "TEST 2: el segundo bloque rígido debe cubrirlo Carlos, Luis, Miguel y Diego."
+  );
+
+  // TEST 2b — mismo escenario pero con el último bloque de solo 3
+  // casillas (no 4): al haber empate en carga (0) entre Carlos, Luis,
+  // Miguel y Diego, el último bloque rígido debe favorecer a los ID
+  // más altos, dejando a Carlos como el que hace el tramo flexible
+  // completo en vez de compartirlo.
+  const test2b = generateSchedule(agents, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "00:30",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+      ],
+    },
+  ]);
+
+  console.assert(!test2b.error, "TEST 2b: no debería haber error.");
+
+  const test2bRigid2 = test2b.schedule
+    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
+    .map((a) => a.id)
+    .sort();
+  console.assert(
+    JSON.stringify(test2bRigid2) === JSON.stringify([4, 5, 6]),
+    "TEST 2b: el último bloque (3 casillas) debe cubrirlo Luis, Miguel y Diego, no Carlos."
+  );
+
+  const test2bDiego = test2b.schedule.find((a) => a.id === 6);
+  console.assert(
+    test2bDiego.assignments.some((a) => a.booth === "Salida 3"),
+    "TEST 2b: Diego (ID más alto entre los empatados) debe quedar en Salida 3."
+  );
+
+  // Reparto flexible esperado a mano: total = 570 min / 6 = 95 min c/u.
+  // Juan y Pedro ya tienen 30 min de rígido, Carlos/Luis/Miguel/Diego
+  // ya tienen 60 min. Juan sigue hasta 01:35, Pedro releva hasta 02:40,
+  // Carlos hasta 03:15, Luis hasta 03:50, Miguel hasta 04:25, Diego
+  // hasta 05:00 (donde empalma con su turno rígido).
+  const juan = test2.schedule.find((a) => a.id === 1);
+  const pedro = test2.schedule.find((a) => a.id === 2);
+  const diego = test2.schedule.find((a) => a.id === 6);
+
+  console.assert(
+    juan.assignments.some((a) => a.start === 30 && a.end === 95),
+    "TEST 2: Juan debería continuar hasta 01:35."
+  );
+  console.assert(
+    pedro.assignments.some((a) => a.start === 95 && a.end === 160),
+    "TEST 2: Pedro debería relevar hasta 02:40."
+  );
+  console.assert(
+    diego.assignments.some((a) => a.start === 265 && a.end === 300),
+    "TEST 2: Diego debería llegar justo hasta las 05:00."
+  );
+  console.assert(test2.stats.difference <= 1, "TEST 2: la diferencia debería ser mínima.");
+
+  // TEST 3
+  // Orden cronológico en el render: un agente que participa solo en el
+  // bloque rígido tardío no debe listar ese turno antes que uno más
+  // temprano en su propio array de assignments.
+  console.assert(
+    diego.assignments.every((a, i) => i === 0 || diego.assignments[i - 1].start <= a.start),
+    "TEST 3: los turnos de cada agente deben quedar ordenados cronológicamente."
+  );
+
+  // TEST 3
+  // Escenario "Guardia Nocturna" reportado: 00:00-01:00 (2 casillas
+  // Entrada), 01:00-05:00 (1 casilla flexible), 05:00-06:00 (3 casillas
+  // Salida), 6 agentes. Carlos queda afuera de ambos bloques rígidos y
+  // necesita 90 min en el tramo flexible, pero el orden de llegada debe
+  // respetarse igual: Juan, Pedro, Carlos, Luis, Miguel, Agente 6 — cada
+  // uno toma lo que le falta cuando le toca el turno, sin saltarse a
+  // nadie por tener más o menos minutos pendientes.
+  const agents3 = [
+    { id: 1, name: "Juan" },
+    { id: 2, name: "Pedro" },
+    { id: 3, name: "Carlos" },
+    { id: 4, name: "Luis" },
+    { id: 5, name: "Miguel" },
+    { id: 6, name: "Agente 6" },
+  ];
+
+  const test3 = generateSchedule(agents3, [
+    {
+      id: 1,
+      start: "00:00",
+      end: "01:00",
+      booths: [
+        { sector: "entrada", numero: 1 },
+        { sector: "entrada", numero: 2 },
+      ],
+    },
+    { id: 2, start: "01:00", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 3,
+      start: "05:00",
+      end: "06:00",
+      booths: [
+        { sector: "salida", numero: 1 },
+        { sector: "salida", numero: 2 },
+        { sector: "salida", numero: 3 },
+      ],
+    },
+  ]);
+
+  console.assert(!test3.error, "TEST 3: no debería haber error.");
+
+  const expectedTest3 = [
+    { id: 1, start: 60, end: 90 }, // Juan 01:00-01:30
+    { id: 2, start: 90, end: 120 }, // Pedro 01:30-02:00
+    { id: 3, start: 120, end: 210 }, // Carlos 02:00-03:30
+    { id: 4, start: 210, end: 240 }, // Luis 03:30-04:00
+    { id: 5, start: 240, end: 270 }, // Miguel 04:00-04:30
+    { id: 6, start: 270, end: 300 }, // Agente 6 04:30-05:00
+  ];
+
+  for (const expected of expectedTest3) {
+    const agent = test3.schedule.find((a) => a.id === expected.id);
+    const found = agent.assignments.some(
+      (a) => a.start === expected.start && a.end === expected.end
+    );
+    console.assert(
+      found,
+      `TEST 3: ${agent.name} debería tener un tramo ${minutesToTime(expected.start)} → ${minutesToTime(expected.end)}.`
+    );
+  }
+
+  return { test1, test2, test2b, test3 };
 }
 
 // =========================================================
@@ -1989,11 +1654,13 @@ function handleDemandDragEnd() {
         <section style={{ marginTop: 40 }}>
           <h2>Horarios de casillas</h2>
           <p>
-            Los bloques con varias casillas se mantienen completos. Las casillas
-            individuales se utilizan posteriormente para completar los minutos
-            faltantes, respetando el orden de llegada. Al elegir casilla el que
-            llega primero recibe la preferencial de cada sector (Entrada: mayor
-            numeración primero; Salida: menor numeración primero).
+            Los bloques finales con varias casillas se mantienen completos y
+            funcionan como reserva. Los bloques multicasilla anteriores se
+            rotan operativamente; las casillas individuales completan la carga
+            restante según el objetivo global. El orden de llegada determina
+            la prioridad y, al asignar casillas, el agente prioritario recibe
+            la preferencial de cada sector (Entrada: mayor numeración primero;
+            Salida: menor numeración primero).
           </p>
 <div className="demand-list">
   {demand.map((item, index) => (
