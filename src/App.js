@@ -379,7 +379,8 @@ function planMultiBoothBlocks(agents, demand) {
         "asc"
       ).sort((a, b) => a.id - b.id);
 
-      selected.forEach((agent, index) => {
+      for (let index = 0; index < selected.length; index += 1) {
+        const agent = selected[index];
         plan.push({
           agentId: agent.id,
           booth: boothLabel(booths[index]),
@@ -388,7 +389,7 @@ function planMultiBoothBlocks(agents, demand) {
           final: false,
         });
         load.set(agent.id, load.get(agent.id) + sliceDuration);
-      });
+      }
 
       current = sliceEnd;
     }
@@ -1021,7 +1022,9 @@ export function runSchedulerTests() {
     );
   }
 
-  return { test1, test2, test2b, test3 };
+  const test4 = runPlanningRegressionTest();
+
+  return { test1, test2, test2b, test3, test4 };
 }
 
 // =========================================================
