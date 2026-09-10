@@ -3,10 +3,6 @@ import "./App.css";
 
 // =========================================================
 // CATÁLOGO FIJO DE CASILLAS
-//
-// Dos sectores con numeración propia. La demanda ya no se carga
-// como una cantidad ("2 casillas"), sino como una selección concreta
-// de casillas de estos catálogos (ej: Entrada 3, Entrada 7, Salida 2).
 // =========================================================
 
 const BOOTH_CATALOG = {
@@ -39,15 +35,6 @@ function minutesToShortTime(minutes) {
 
 // =========================================================
 // SESGO DE ASIGNACIÓN POR SECTOR
-//
-// Cuando hay varias casillas simultáneas, el agente que llegó antes
-// (mayor prioridad = menor carga acumulada, empate por ID) recibe la
-// casilla "preferencial" de su sector:
-//   - Entrada primero, Salida después.
-//   - Dentro de Entrada: de mayor a menor numeración.
-//   - Dentro de Salida: de menor a mayor numeración.
-// Es un sesgo puramente de etiquetado: no cambia un solo minuto de
-// carga horaria, solo decide qué texto queda grabado en el turno.
 // =========================================================
 
 function sortBoothsForAssignment(booths) {
@@ -62,7 +49,17 @@ function sortBoothsForAssignment(booths) {
   return [...entrada, ...salida];
 }
 
-const INITIAL_AGENTS = [{ id: 1, name: "" }];
+// =========================================================
+// DATOS INICIALES
+// =========================================================
+
+const INITIAL_AGENTS = [
+  {
+    id: 1,
+    name: "",
+    workedMinutes: 0,
+  },
+];
 
 const INITIAL_DEMAND = [
   {
@@ -84,6 +81,7 @@ const INITIAL_DEMAND = [
     booths: [],
   },
 ];
+
 const STORAGE_KEYS = {
   agents: "guardia-nocturna-agents",
   demand: "guardia-nocturna-demand",
@@ -92,6 +90,7 @@ const STORAGE_KEYS = {
 // =========================================================
 // UTILIDADES
 // =========================================================
+
 function createUid() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -100,10 +99,21 @@ function createUid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeWorkedMinutes(value) {
+  const minutes = Number(value);
+
+  if (!Number.isFinite(minutes)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(minutes));
+}
+
 function normalizeAgents(savedAgents) {
   return savedAgents.map((agent) => ({
     ...agent,
     uid: agent.uid || createUid(),
+    workedMinutes: normalizeWorkedMinutes(agent.workedMinutes),
   }));
 }
 
@@ -134,15 +144,27 @@ function timeToMinutes(time) {
 }
 
 function minutesToTime(minutes) {
-  const hours = Math.floor(minutes / 60).toString().padStart(2, "0");
-  const mins = (minutes % 60).toString().padStart(2, "0");
+  const hours = Math.floor(minutes / 60)
+    .toString()
+    .padStart(2, "0");
+
+  const mins = (minutes % 60)
+    .toString()
+    .padStart(2, "0");
+
   return `${hours}:${mins}`;
 }
 
 function formatMinutes(minutes) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
+
   if (hours === 0) return `${mins} min`;
+
+  if (mins === 0) {
+    return `${hours}h`;
+  }
+
   return `${hours}h ${mins}m`;
 }
 
@@ -151,8 +173,13 @@ function formatMinutes(minutes) {
 // =========================================================
 
 function validateDemand(agents, demand) {
-  if (agents.length === 0) return "Debe existir al menos un agente.";
-  if (demand.length === 0) return "Debe existir al menos un intervalo de demanda.";
+  if (agents.length === 0) {
+    return "Debe existir al menos un agente.";
+  }
+
+  if (demand.length === 0) {
+    return "Debe existir al menos un intervalo de demanda.";
+  }
 
   const normalized = demand.map((item) => ({
     ...item,
@@ -164,45 +191,62 @@ function validateDemand(agents, demand) {
     if (item.startMinutes >= item.endMinutes) {
       return `Horario inválido: ${item.start} → ${item.end}`;
     }
+
     if (!item.booths || item.booths.length < 1) {
-      return `El intervalo ${item.start} → ${item.end} necesita al menos una casilla seleccionada.`;
+      return (
+        `El intervalo ${item.start} → ${item.end} ` +
+        `necesita al menos una casilla seleccionada.`
+      );
     }
+
     if (item.booths.length > agents.length) {
       return (
-        `El intervalo ${item.start} → ${item.end} requiere ${item.booths.length} ` +
-        `casillas pero solo hay ${agents.length} agentes.`
+        `El intervalo ${item.start} → ${item.end} requiere ` +
+        `${item.booths.length} casillas pero solo hay ` +
+        `${agents.length} agentes.`
       );
     }
 
     const seen = new Set();
+
     for (const booth of item.booths) {
       const key = boothKey(booth);
+
       if (seen.has(key)) {
-        return `El intervalo ${item.start} → ${item.end} tiene la casilla ${boothLabel(booth)} repetida.`;
+        return (
+          `El intervalo ${item.start} → ${item.end} tiene ` +
+          `la casilla ${boothLabel(booth)} repetida.`
+        );
       }
+
       seen.add(key);
 
       const max = BOOTH_CATALOG[booth.sector];
-      if (!max || booth.numero < 1 || booth.numero > max) {
+
+      if (
+        !max ||
+        booth.numero < 1 ||
+        booth.numero > max
+      ) {
         return `Casilla inválida: ${boothLabel(booth)}.`;
       }
     }
   }
 
   const sorted = [...normalized].sort((a, b) =>
-    a.startMinutes !== b.startMinutes ? a.startMinutes - b.startMinutes : a.id - b.id
+    a.startMinutes !== b.startMinutes
+      ? a.startMinutes - b.startMinutes
+      : a.id - b.id
   );
 
-  // La demanda es absoluta: no permitimos superposición.
-  // Una casilla extra que se abre "en el medio" de otro intervalo no se
-  // modela como solapamiento, sino como un intervalo nuevo y adyacente
-  // (ej: en vez de "1 casilla 01→05", cargás "1 casilla 01→02",
-  // "2 casillas 02→03", "1 casilla 03→05"). El resto del motor no necesita
-  // saber que eso es una apertura excepcional: es un intervalo más.
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i].startMinutes < sorted[i - 1].endMinutes) {
+    if (
+      sorted[i].startMinutes <
+      sorted[i - 1].endMinutes
+    ) {
       return (
-        `Hay intervalos superpuestos: ${sorted[i - 1].start} → ${sorted[i - 1].end} ` +
+        `Hay intervalos superpuestos: ` +
+        `${sorted[i - 1].start} → ${sorted[i - 1].end} ` +
         `y ${sorted[i].start} → ${sorted[i].end}`
       );
     }
@@ -211,60 +255,61 @@ function validateDemand(agents, demand) {
   return null;
 }
 
-function calculateTotalWork(demand) {
+// =========================================================
+// DEMANDA
+// =========================================================
+//
+// IMPORTANTE:
+//
+// demandWork = solamente los minutos de la planificación actual.
+//
+// historicalWork = minutos ya trabajados previamente.
+//
+// globalWork = historicalWork + demandWork.
+//
+// El objetivo se calcula sobre globalWork.
+// =========================================================
+
+function calculateDemandWork(demand) {
   return demand.reduce((total, item) => {
-    const duration = timeToMinutes(item.end) - timeToMinutes(item.start);
+    const duration =
+      timeToMinutes(item.end) -
+      timeToMinutes(item.start);
+
     return total + duration * item.booths.length;
   }, 0);
 }
 
-// =========================================================
-// MOTOR DE PLANIFICACIÓN
-//
-// La planificación final separa dos conceptos:
-//
-// 1) RESERVAS: bloques finales que no deben ser consumidos por la
-//    planificación flexible (por ejemplo 05:00 → 06:00 con 2 casillas).
-//
-// 2) ROTACIÓN: los bloques de varias casillas que no son finales se
-//    pueden rotar operativamente. La unidad de rotación preferida es
-//    60 minutos: no es un objetivo matemático, sino una regla operativa.
-//
-// 3) FLEXIBLE: una vez conocida la demanda completa, se calcula cuánto
-//    necesita cada agente para acercarse a su objetivo global, descontando
-//    las reservas futuras. Luego se entrega ese trabajo en orden de llegada,
-//    sin superar el objetivo salvo que sea inevitable.
-// =========================================================
-
-function pickLeastLoaded(agents, loadOf, quantity, tieBreak = "asc") {
-  const tieBreakSign = tieBreak === "desc" ? -1 : 1;
-
-  return [...agents]
-    .sort((a, b) => {
-      const diff = loadOf(a) - loadOf(b);
-      return diff !== 0 ? diff : tieBreakSign * (a.id - b.id);
-    })
-    .slice(0, quantity);
+function calculateHistoricalWork(agents) {
+  return agents.reduce(
+    (total, agent) =>
+      total + normalizeWorkedMinutes(agent.workedMinutes),
+    0
+  );
 }
 
-function addAssignment(agent, start, end, booth) {
-  if (end <= start) return;
-
-  const last = agent.assignments[agent.assignments.length - 1];
-
-  if (last && last.end === start && last.booth === booth) {
-    last.end = end;
-    last.minutes += end - start;
-    return;
-  }
-
-  agent.assignments.push({ start, end, booth, minutes: end - start });
+function calculateGlobalWork(agents, demand) {
+  return (
+    calculateHistoricalWork(agents) +
+    calculateDemandWork(demand)
+  );
 }
 
-function calculateTargets(agents, totalWork) {
-  const sortedById = [...agents].sort((a, b) => a.id - b.id);
-  const base = Math.floor(totalWork / sortedById.length);
-  const remainder = totalWork % sortedById.length;
+// =========================================================
+// OBJETIVOS
+// =========================================================
+
+function calculateTargets(agents, globalWork) {
+  const sortedById = [...agents].sort(
+    (a, b) => a.id - b.id
+  );
+
+  const base = Math.floor(
+    globalWork / sortedById.length
+  );
+
+  const remainder =
+    globalWork % sortedById.length;
 
   return new Map(
     sortedById.map((agent, index) => [
@@ -280,230 +325,462 @@ function calculateTargets(agents, totalWork) {
 
 function getFinalRigidInterval(demand) {
   const lastDemandEnd = Math.max(
-    ...demand.map((item) => timeToMinutes(item.end))
+    ...demand.map((item) =>
+      timeToMinutes(item.end)
+    )
   );
 
   const candidate = [...demand]
     .filter((item) => item.booths.length >= 2)
     .sort(
       (a, b) =>
-        timeToMinutes(b.end) - timeToMinutes(a.end)
+        timeToMinutes(b.end) -
+        timeToMinutes(a.end)
     )
     .find(
       (item) =>
-        timeToMinutes(item.end) === lastDemandEnd
+        timeToMinutes(item.end) ===
+        lastDemandEnd
     );
 
   if (!candidate) return null;
 
-  // Un bloque multicasilla aislado no necesita tratamiento especial.
-  // La reserva final solo existe cuando hay trabajo anterior que pueda
-  // consumir minutos de los agentes que luego deben cubrir este bloque.
-  const candidateStart = timeToMinutes(candidate.start);
+  const candidateStart = timeToMinutes(
+    candidate.start
+  );
+
   const hasPreviousDemand = demand.some(
-    (item) => timeToMinutes(item.start) < candidateStart
+    (item) =>
+      timeToMinutes(item.start) <
+      candidateStart
   );
 
   return hasPreviousDemand ? candidate : null;
 }
 
 // =========================================================
-// FASE 1 — ROTACIÓN DE BLOQUES MULTICASILLA
-// =========================================================
-//
-// Los bloques multicasilla NO finales se rotan en unidades de hasta 60 min.
-//
-// Ejemplo 6 agentes / 2 casillas / 00:00 → 01:40:
-//
-// 00:00 → 01:00  A1 A2
-// 01:00 → 01:40  A3 A4
-//
-// Esto reproduce la idea operacional: quienes llegaron primero conservan
-// prioridad, pero no monopolizan la casilla durante todo el bloque.
-//
-// El último bloque multicasilla se considera RESERVA y se mantiene completo.
-// Los agentes elegidos son los de ID más alto, preservando la regla existente.
+// SELECCIÓN DE AGENTES
 // =========================================================
 
-function planMultiBoothBlocks(agents, demand) {
+function pickLeastLoaded(
+  agents,
+  loadOf,
+  quantity,
+  tieBreak = "asc"
+) {
+  const tieBreakSign =
+    tieBreak === "desc" ? -1 : 1;
+
+  return [...agents]
+    .sort((a, b) => {
+      const diff =
+        loadOf(a) - loadOf(b);
+
+      return diff !== 0
+        ? diff
+        : tieBreakSign *
+            (a.id - b.id);
+    })
+    .slice(0, quantity);
+}
+
+// =========================================================
+// ASIGNACIONES
+// =========================================================
+
+function addAssignment(
+  agent,
+  start,
+  end,
+  booth
+) {
+  if (end <= start) return;
+
+  const last =
+    agent.assignments[
+      agent.assignments.length - 1
+    ];
+
+  if (
+    last &&
+    last.end === start &&
+    last.booth === booth
+  ) {
+    last.end = end;
+    last.minutes += end - start;
+    return;
+  }
+
+  agent.assignments.push({
+    start,
+    end,
+    booth,
+    minutes: end - start,
+  });
+}
+
+// =========================================================
+// FASE 1 — ROTACIÓN MULTICASILLA
+// =========================================================
+
+function planMultiBoothBlocks(
+  agents,
+  demand
+) {
   const plan = [];
-  const load = new Map(agents.map((agent) => [agent.id, 0]));
-  const finalRigid = getFinalRigidInterval(demand);
+
+  const load = new Map(
+    agents.map((agent) => [
+      agent.id,
+      0,
+    ])
+  );
+
+  const finalRigid =
+    getFinalRigidInterval(demand);
 
   const intervals = [...demand]
-    .filter((item) => item.booths.length >= 2)
+    .filter(
+      (item) =>
+        item.booths.length >= 2
+    )
     .sort(
       (a, b) =>
-        timeToMinutes(a.start) - timeToMinutes(b.start) || a.id - b.id
+        timeToMinutes(a.start) -
+          timeToMinutes(b.start) ||
+        a.id - b.id
     );
 
   for (const interval of intervals) {
-    const start = timeToMinutes(interval.start);
-    const end = timeToMinutes(interval.end);
-    const duration = end - start;
-    const isFinal = finalRigid && interval.id === finalRigid.id;
-    const booths = sortBoothsForAssignment(interval.booths);
+    const start = timeToMinutes(
+      interval.start
+    );
+
+    const end = timeToMinutes(
+      interval.end
+    );
+
+    const isFinal =
+      finalRigid &&
+      interval.id === finalRigid.id;
+
+    const booths =
+      sortBoothsForAssignment(
+        interval.booths
+      );
 
     if (isFinal) {
-      // Reserva final: no se fragmenta.
+      // Reserva final.
+      //
+      // Se mantiene exactamente la regla original:
+      // los IDs más altos reciben esta reserva.
+
       const selected = [...agents]
         .sort((a, b) => b.id - a.id)
         .slice(0, booths.length)
         .sort((a, b) => a.id - b.id);
 
-      selected.forEach((agent, index) => {
-        plan.push({
-          agentId: agent.id,
-          booth: boothLabel(booths[index]),
-          start,
-          end,
-          final: true,
-        });
-        load.set(agent.id, load.get(agent.id) + duration);
-      });
+      selected.forEach(
+        (agent, index) => {
+          plan.push({
+            agentId: agent.id,
+            booth: boothLabel(
+              booths[index]
+            ),
+            start,
+            end,
+            final: true,
+          });
+
+          load.set(
+            agent.id,
+            load.get(agent.id) +
+              (end - start)
+          );
+        }
+      );
+
       continue;
     }
 
-    // Rotación operacional: cada bloque de hasta 60 minutos selecciona
-    // los agentes menos cargados; en empate, menor ID.
+    // Rotación en bloques de hasta 60 minutos.
+
     let current = start;
 
     while (current < end) {
-      const sliceEnd = Math.min(current + 60, end);
-      const sliceDuration = sliceEnd - current;
+      const sliceEnd = Math.min(
+        current + 60,
+        end
+      );
 
-      const selected = pickLeastLoaded(
-        agents,
-        (agent) => load.get(agent.id),
-        booths.length,
-        "asc"
-      ).sort((a, b) => a.id - b.id);
+      const sliceDuration =
+        sliceEnd - current;
 
-      for (let index = 0; index < selected.length; index += 1) {
-        const agent = selected[index];
+      const selected =
+        pickLeastLoaded(
+          agents,
+          (agent) =>
+            load.get(agent.id),
+          booths.length,
+          "asc"
+        ).sort(
+          (a, b) => a.id - b.id
+        );
+
+      for (
+        let index = 0;
+        index < selected.length;
+        index += 1
+      ) {
+        const agent =
+          selected[index];
+
         plan.push({
           agentId: agent.id,
-          booth: boothLabel(booths[index]),
+          booth: boothLabel(
+            booths[index]
+          ),
           start: current,
           end: sliceEnd,
           final: false,
         });
-        load.set(agent.id, load.get(agent.id) + sliceDuration);
+
+        load.set(
+          agent.id,
+          load.get(agent.id) +
+            sliceDuration
+        );
       }
 
       current = sliceEnd;
     }
   }
 
-  return { plan, fixedMinutes: load, finalRigid };
+  return {
+    plan,
+    fixedMinutes: load,
+    finalRigid,
+  };
 }
 
-function applyPlan(agents, plan) {
+// =========================================================
+// APLICAR PLAN
+// =========================================================
+
+function applyPlan(
+  agents,
+  plan
+) {
   for (const item of plan) {
-    const agent = agents.find((candidate) => candidate.id === item.agentId);
+    const agent = agents.find(
+      (candidate) =>
+        candidate.id ===
+        item.agentId
+    );
+
     if (!agent) continue;
 
-    addAssignment(agent, item.start, item.end, item.booth);
-    agent.minutes += item.end - item.start;
+    addAssignment(
+      agent,
+      item.start,
+      item.end,
+      item.booth
+    );
+
+    agent.minutes +=
+      item.end - item.start;
   }
 }
 
 // =========================================================
-// FASE 2 — RESERVAS FUTURAS
-// =========================================================
-//
-// Para un agente que participa en el bloque final, esa carga ya está
-// comprometida. El flexible solamente puede asignarle lo que le falta
-// para llegar a su objetivo DESPUÉS de descontar esa reserva.
+// RESERVAS
 // =========================================================
 
-function calculateReservedMinutes(agents, plan) {
-  const reserved = new Map(agents.map((agent) => [agent.id, 0]));
+function calculateReservedMinutes(
+  agents,
+  plan
+) {
+  const reserved = new Map(
+    agents.map((agent) => [
+      agent.id,
+      0,
+    ])
+  );
 
   for (const item of plan) {
     if (!item.final) continue;
 
     reserved.set(
       item.agentId,
-      reserved.get(item.agentId) + (item.end - item.start)
+      reserved.get(item.agentId) +
+        (item.end - item.start)
     );
   }
 
   return reserved;
 }
 
+// =========================================================
+// FASE 2 — ASIGNACIÓN FLEXIBLE
+// =========================================================
+//
+// Esta es la parte modificada para contemplar:
+//
+// workedMinutes = carga previa
+// fixedMinutes  = carga nueva rígida/reservada
+// target        = carga global objetivo
+//
+// necesidad nueva flexible:
+//
+// target
+// - workedMinutes
+// - fixedMinutes
+//
+// Nunca se descuenta el histórico de la demanda.
+// El histórico solamente afecta cuánto necesita
+// trabajar cada agente ahora.
+// =========================================================
+
 function calculateFlexibleAllocation(
   agents,
   flexibleWork,
   targets,
-  fixedMinutes,
-  reservedMinutes
+  fixedMinutes
 ) {
-  const allocation = new Map(agents.map((agent) => [agent.id, 0]));
+  const allocation = new Map(
+    agents.map((agent) => [
+      agent.id,
+      0,
+    ])
+  );
 
-  const needs = agents.map((agent) => {
-    const target = targets.get(agent.id);
-    const fixed = fixedMinutes.get(agent.id) || 0;
-    const reserved = reservedMinutes.get(agent.id) || 0;
-    const workedBeforeFlexible = Math.max(0, fixed - reserved);
+  const needs = agents.map(
+    (agent) => {
+      const historical =
+        normalizeWorkedMinutes(
+          agent.workedMinutes
+        );
 
-    return {
-      agent,
-      target,
-      fixed: workedBeforeFlexible,
-      reserved,
-      need: Math.max(0, target - workedBeforeFlexible - reserved),
-    };
-  });
+      const target =
+        targets.get(agent.id);
 
-  let remainingWork = flexibleWork;
+      const fixed =
+        fixedMinutes.get(
+          agent.id
+        ) || 0;
 
-  // La prioridad NO es "quién tiene menos minutos".
-  // Es "quién llegó antes y todavía necesita minutos para alcanzar su
-  // objetivo, descontando lo que ya tiene reservado".
+      const need = Math.max(
+        0,
+        target -
+          historical -
+          fixed
+      );
+
+      return {
+        agent,
+        target,
+        historical,
+        fixed,
+        need,
+      };
+    }
+  );
+
+  let remainingWork =
+    flexibleWork;
+
+  // =======================================================
+  // PRIORIDAD:
   //
-  // Por eso, en el ejemplo:
-  // A1 → 27
-  // A2 → 27
-  // A3 → 47
-  // A4 → 47
-  // A5 → 27
-  // A6 → 27
+  // 1. Orden de llegada / ID.
+  // 2. Solamente participan agentes que todavía necesitan
+  //    minutos para alcanzar su objetivo.
   //
-  // se procesa A1 → A2 → A3 → A4 → A5 → A6.
-  for (const item of needs.sort((a, b) => a.agent.id - b.agent.id)) {
-    if (remainingWork <= 0) break;
+  // El histórico NO cambia el orden de llegada.
+  // Sí cambia cuánto necesita trabajar cada uno.
+  // =======================================================
 
-    const available = Math.min(item.need, remainingWork);
+  for (const item of needs.sort(
+    (a, b) =>
+      a.agent.id - b.agent.id
+  )) {
+    if (remainingWork <= 0) {
+      break;
+    }
 
-    allocation.set(item.agent.id, available);
+    const available =
+      Math.min(
+        item.need,
+        remainingWork
+      );
+
+    allocation.set(
+      item.agent.id,
+      available
+    );
+
     remainingWork -= available;
   }
 
-  // Si todavía queda trabajo después de que todos alcanzaron el objetivo,
-  // hay sobrecarga inevitable. Se reparte intentando minimizar la carga
-  // final, manteniendo ID como desempate.
+  // =======================================================
+  // SOBRECARGA INEVITABLE
+  //
+  // Si todavía queda demanda después de que todos
+  // alcanzaron su objetivo, se asigna al agente cuya
+  // CARGA TOTAL sea menor.
+  //
+  // Carga total =
+  // histórico + rígido + flexible.
+  // =======================================================
+
   while (remainingWork > 0) {
     const candidates = agents
-      .map((agent) => ({
-        agent,
-        current:
-          (fixedMinutes.get(agent.id) || 0) +
-          (reservedMinutes.get(agent.id) || 0) +
-          (allocation.get(agent.id) || 0),
-      }))
+      .map((agent) => {
+        const historical =
+          normalizeWorkedMinutes(
+            agent.workedMinutes
+          );
+
+        const fixed =
+          fixedMinutes.get(
+            agent.id
+          ) || 0;
+
+        const flexible =
+          allocation.get(
+            agent.id
+          ) || 0;
+
+        return {
+          agent,
+          current:
+            historical +
+            fixed +
+            flexible,
+        };
+      })
       .sort(
         (a, b) =>
-          a.current - b.current || a.agent.id - b.agent.id
+          a.current -
+            b.current ||
+          a.agent.id -
+            b.agent.id
       );
 
-    if (!candidates.length) break;
+    if (!candidates.length) {
+      break;
+    }
 
-    const selected = candidates[0].agent;
+    const selected =
+      candidates[0].agent;
+
     allocation.set(
       selected.id,
-      allocation.get(selected.id) + 1
+      allocation.get(
+        selected.id
+      ) + 1
     );
+
     remainingWork -= 1;
   }
 
@@ -513,41 +790,73 @@ function calculateFlexibleAllocation(
 // =========================================================
 // FASE 3 — INTERVALOS DE UNA CASILLA
 // =========================================================
-//
-// Ya NO se decide la cantidad de minutos durante el recorrido.
-// Primero calculateFlexibleAllocation() determina cuánto corresponde a
-// cada agente. Acá solamente convertimos esa cuota en horarios.
-//
-// La secuencia respeta ID. Si un agente llega al objetivo, pasa al siguiente.
-// =========================================================
 
-function buildFlexibleSchedule(agents, demand, allocation) {
-  const remaining = new Map(allocation);
+function buildFlexibleSchedule(
+  agents,
+  demand,
+  allocation
+) {
+  const remaining = new Map(
+    allocation
+  );
 
-  const flexibleIntervals = [...demand]
-    .filter((item) => item.booths.length === 1)
-    .sort(
-      (a, b) =>
-        timeToMinutes(a.start) - timeToMinutes(b.start) || a.id - b.id
-    );
+  const flexibleIntervals =
+    [...demand]
+      .filter(
+        (item) =>
+          item.booths.length === 1
+      )
+      .sort(
+        (a, b) =>
+          timeToMinutes(a.start) -
+            timeToMinutes(b.start) ||
+          a.id - b.id
+      );
 
   for (const interval of flexibleIntervals) {
-    let current = timeToMinutes(interval.start);
-    const end = timeToMinutes(interval.end);
-    const booth = boothLabel(interval.booths[0]);
+    let current =
+      timeToMinutes(
+        interval.start
+      );
+
+    const end =
+      timeToMinutes(
+        interval.end
+      );
+
+    const booth =
+      boothLabel(
+        interval.booths[0]
+      );
 
     while (current < end) {
-      const candidates = agents
-        .filter((agent) => (remaining.get(agent.id) || 0) > 0)
-        .sort((a, b) => a.id - b.id);
+      const candidates =
+        agents
+          .filter(
+            (agent) =>
+              (remaining.get(
+                agent.id
+              ) || 0) > 0
+          )
+          .sort(
+            (a, b) =>
+              a.id - b.id
+          );
 
-      if (!candidates.length) break;
+      if (!candidates.length) {
+        break;
+      }
 
-      const agent = candidates[0];
-      const duration = Math.min(
-        remaining.get(agent.id),
-        end - current
-      );
+      const agent =
+        candidates[0];
+
+      const duration =
+        Math.min(
+          remaining.get(
+            agent.id
+          ),
+          end - current
+        );
 
       addAssignment(
         agent,
@@ -556,46 +865,80 @@ function buildFlexibleSchedule(agents, demand, allocation) {
         booth
       );
 
-      agent.minutes += duration;
-      remaining.set(agent.id, remaining.get(agent.id) - duration);
+      agent.minutes +=
+        duration;
+
+      remaining.set(
+        agent.id,
+        remaining.get(
+          agent.id
+        ) - duration
+      );
+
       current += duration;
     }
   }
 
-  // Si por la forma de la demanda quedaron minutos flexibles sin asignar
-  // después de que todos alcanzaron su objetivo, los absorbemos en el
-  // agente de menor carga total, respetando ID como desempate.
   return remaining;
 }
 
 // =========================================================
-// VALIDACIÓN FINAL DEL SCHEDULE
+// VALIDACIÓN FINAL
 // =========================================================
 
-function validateGeneratedSchedule(agents, demand) {
+function validateGeneratedSchedule(
+  agents,
+  demand
+) {
   for (const interval of demand) {
-    const start = timeToMinutes(interval.start);
-    const end = timeToMinutes(interval.end);
+    const start =
+      timeToMinutes(
+        interval.start
+      );
 
-    for (let minute = start; minute < end; minute++) {
+    const end =
+      timeToMinutes(
+        interval.end
+      );
+
+    for (
+      let minute = start;
+      minute < end;
+      minute++
+    ) {
       let activeCount = 0;
 
       for (const agent of agents) {
-        const active = agent.assignments.filter(
-          (a) => a.start <= minute && a.end > minute
-        );
+        const active =
+          agent.assignments.filter(
+            (a) =>
+              a.start <= minute &&
+              a.end > minute
+          );
 
         if (active.length > 1) {
-          return `El agente ${agent.name} está asignado a más de una casilla simultáneamente.`;
+          return (
+            `El agente ${agent.name} ` +
+            `está asignado a más de una ` +
+            `casilla simultáneamente.`
+          );
         }
 
-        activeCount += active.length;
+        activeCount +=
+          active.length;
       }
 
-      if (activeCount !== interval.booths.length) {
+      if (
+        activeCount !==
+        interval.booths.length
+      ) {
         return (
-          `La demanda ${interval.start} → ${interval.end} requiere ${interval.booths.length} ` +
-          `casillas, pero el minuto ${minutesToTime(minute)} tiene ${activeCount} asignadas.`
+          `La demanda ${interval.start} → ` +
+          `${interval.end} requiere ` +
+          `${interval.booths.length} casillas, ` +
+          `pero el minuto ${minutesToTime(
+            minute
+          )} tiene ${activeCount} asignadas.`
         );
       }
     }
@@ -608,87 +951,204 @@ function validateGeneratedSchedule(agents, demand) {
 // GENERADOR PRINCIPAL
 // =========================================================
 
-export function generateSchedule(agentsInput, demand) {
-  const error = validateDemand(agentsInput, demand);
-  if (error) return { error, schedule: [], stats: null };
+export function generateSchedule(
+  agentsInput,
+  demand
+) {
+  const error =
+    validateDemand(
+      agentsInput,
+      demand
+    );
 
-  const agents = agentsInput.map((agent) => ({
-    ...agent,
-    minutes: 0,
-    assignments: [],
-  }));
+  if (error) {
+    return {
+      error,
+      schedule: [],
+      stats: null,
+    };
+  }
 
-  const sortedDemand = [...demand].sort((a, b) => {
-    const startA = timeToMinutes(a.start);
-    const startB = timeToMinutes(b.start);
-    return startA !== startB ? startA - startB : a.id - b.id;
-  });
+  const agents =
+    agentsInput.map(
+      (agent) => ({
+        ...agent,
 
-  const totalWork = calculateTotalWork(sortedDemand);
-  const targets = calculateTargets(agents, totalWork);
+        // Carga previa.
+        workedMinutes:
+          normalizeWorkedMinutes(
+            agent.workedMinutes
+          ),
 
-  // -------------------------------------------------------
-  // 1. Planificar multicasilla y reservas finales.
-  // -------------------------------------------------------
+        // Carga generada por ESTA planificación.
+        minutes: 0,
+
+        assignments: [],
+      })
+    );
+
+  const sortedDemand =
+    [...demand].sort(
+      (a, b) => {
+        const startA =
+          timeToMinutes(
+            a.start
+          );
+
+        const startB =
+          timeToMinutes(
+            b.start
+          );
+
+        return (
+          startA !== startB
+            ? startA - startB
+            : a.id - b.id
+        );
+      }
+    );
+
+  // =======================================================
+  // 1. DEMANDA NUEVA
+  // =======================================================
+
+  const demandWork =
+    calculateDemandWork(
+      sortedDemand
+    );
+
+  // =======================================================
+  // 2. HISTÓRICO
+  // =======================================================
+
+  const historicalWork =
+    calculateHistoricalWork(
+      agents
+    );
+
+  // =======================================================
+  // 3. CARGA GLOBAL
+  //
+  // Esto es lo que ahora determina el promedio.
+  // =======================================================
+
+  const globalWork =
+    demandWork +
+    historicalWork;
+
+  // =======================================================
+  // 4. OBJETIVO GLOBAL POR AGENTE
+  // =======================================================
+
+  const targets =
+    calculateTargets(
+      agents,
+      globalWork
+    );
+
+  // =======================================================
+  // 5. MULTICASILLA / RESERVAS
+  // =======================================================
+
   const {
     plan: multiBoothPlan,
     fixedMinutes,
-  } = planMultiBoothBlocks(agents, sortedDemand);
+  } =
+    planMultiBoothBlocks(
+      agents,
+      sortedDemand
+    );
 
-  const reservedMinutes = calculateReservedMinutes(
+  // =======================================================
+  // 6. RESERVAS FINALES
+  // =======================================================
+
+  const reservedMinutes =
+    calculateReservedMinutes(
+      agents,
+      multiBoothPlan
+    );
+
+  // reservedMinutes se mantiene calculado porque
+  // forma parte del modelo de reservas y sirve para
+  // información/debug futuro.
+  void reservedMinutes;
+
+  // =======================================================
+  // 7. APLICAR BLOQUES MULTICASILLA
+  // =======================================================
+
+  applyPlan(
     agents,
     multiBoothPlan
   );
 
-  // -------------------------------------------------------
-  // 2. Aplicar primero esos turnos.
-  // -------------------------------------------------------
-  applyPlan(agents, multiBoothPlan);
+  // =======================================================
+  // 8. DEMANDA FLEXIBLE
+  // =======================================================
 
-  // -------------------------------------------------------
-  // 3. Calcular cuánto trabajo flexible corresponde a cada agente.
-  // -------------------------------------------------------
-  const flexibleWork = sortedDemand
-    .filter((item) => item.booths.length === 1)
-    .reduce(
-      (total, item) =>
-        total +
-        timeToMinutes(item.end) -
-        timeToMinutes(item.start),
-      0
+  const flexibleWork =
+    sortedDemand
+      .filter(
+        (item) =>
+          item.booths.length === 1
+      )
+      .reduce(
+        (total, item) =>
+          total +
+          timeToMinutes(
+            item.end
+          ) -
+          timeToMinutes(
+            item.start
+          ),
+        0
+      );
+
+  // =======================================================
+  // 9. CUÁNTO NECESITA CADA AGENTE
+  //
+  // AHORA SE DESCUENTA TAMBIÉN EL HISTÓRICO.
+  // =======================================================
+
+  const allocation =
+    calculateFlexibleAllocation(
+      agents,
+      flexibleWork,
+      targets,
+      fixedMinutes
     );
 
-  const allocation = calculateFlexibleAllocation(
-    agents,
-    flexibleWork,
-    targets,
-    fixedMinutes,
-    reservedMinutes
-  );
+  // =======================================================
+  // 10. CONVERTIR CUOTAS EN HORARIOS
+  // =======================================================
 
-  // -------------------------------------------------------
-  // 4. Convertir cuotas a horario.
-  // -------------------------------------------------------
   buildFlexibleSchedule(
     agents,
     sortedDemand,
     allocation
   );
 
-  // -------------------------------------------------------
-  // 5. Orden cronológico.
-  // -------------------------------------------------------
+  // =======================================================
+  // 11. ORDEN CRONOLÓGICO
+  // =======================================================
+
   for (const agent of agents) {
-    agent.assignments.sort((a, b) => a.start - b.start);
+    agent.assignments.sort(
+      (a, b) =>
+        a.start - b.start
+    );
   }
 
-  // -------------------------------------------------------
-  // 6. Validación.
-  // -------------------------------------------------------
-  const scheduleError = validateGeneratedSchedule(
-    agents,
-    sortedDemand
-  );
+  // =======================================================
+  // 12. VALIDACIÓN
+  // =======================================================
+
+  const scheduleError =
+    validateGeneratedSchedule(
+      agents,
+      sortedDemand
+    );
 
   if (scheduleError) {
     return {
@@ -698,88 +1158,180 @@ export function generateSchedule(agentsInput, demand) {
     };
   }
 
-  const loads = agents.map((agent) => agent.minutes);
-  const minMinutes = Math.min(...loads);
-  const maxMinutes = Math.max(...loads);
+  // =======================================================
+  // 13. CARGA TOTAL
+  //
+  // Histórico + nueva planificación.
+  // =======================================================
+
+  const totalLoads =
+    agents.map(
+      (agent) =>
+        agent.workedMinutes +
+        agent.minutes
+    );
+
+  const minMinutes =
+    Math.min(...totalLoads);
+
+  const maxMinutes =
+    Math.max(...totalLoads);
+
+  const target =
+    globalWork / agents.length;
 
   return {
     error: null,
+
     schedule: agents,
+
     stats: {
-      totalWork,
-      target: totalWork / agents.length,
+      // Demanda de este turno.
+      demandWork,
+
+      // Minutos trabajados previamente.
+      historicalWork,
+
+      // Histórico + demanda nueva.
+      globalWork,
+
+      // Promedio global.
+      target,
+
+      // Carga total mínima/máxima.
       minMinutes,
       maxMinutes,
-      difference: maxMinutes - minMinutes,
+
+      // Diferencia entre cargas totales.
+      difference:
+        maxMinutes -
+        minMinutes,
     },
   };
 }
 
 // =========================================================
-// TEST 4 — ESCENARIO REAL DE PLANIFICACIÓN
+// TEST DE REGRESIÓN CON MINUTOS HISTÓRICOS
+// =========================================================
 //
-// 00:00–01:40 → 2 casillas
-// 01:40–05:00 → 1 casilla
-// 05:00–06:00 → 2 casillas finales
+// 6 agentes.
+// 00:00 → 06:00, una casilla.
 //
-// El primer bloque rota a la hora:
-// A1/A2 → 60 min
-// A3/A4 → 40 min
+// A1 ya trabajó 30 minutos.
 //
-// El bloque final reserva 60 min para A5/A6.
-// El flexible completa el objetivo global por orden de llegada.
-// Resultado esperado: diferencia máxima de 1 minuto.
+// Demanda nueva = 360.
+// Histórico = 30.
+// Total global = 390.
+// Objetivo = 65.
+//
+// A1 debe recibir 35 minutos.
+// A2-A6 deben recibir 65.
+//
+// Carga final:
+//
+// A1 = 30 + 35 = 65
+// A2 = 65
+// A3 = 65
+// A4 = 65
+// A5 = 65
+// A6 = 65
+//
 // =========================================================
 
-function runPlanningRegressionTest() {
-  const testAgents = [1, 2, 3, 4, 5, 6].map((id) => ({
-    id,
-    name: `Agente ${id}`,
-  }));
+function runHistoricalMinutesRegressionTest() {
+  const testAgents = [
+    {
+      id: 1,
+      name: "Agente 1",
+      workedMinutes: 30,
+    },
+    {
+      id: 2,
+      name: "Agente 2",
+      workedMinutes: 0,
+    },
+    {
+      id: 3,
+      name: "Agente 3",
+      workedMinutes: 0,
+    },
+    {
+      id: 4,
+      name: "Agente 4",
+      workedMinutes: 0,
+    },
+    {
+      id: 5,
+      name: "Agente 5",
+      workedMinutes: 0,
+    },
+    {
+      id: 6,
+      name: "Agente 6",
+      workedMinutes: 0,
+    },
+  ];
 
   const testDemand = [
     {
       id: 1,
       start: "00:00",
-      end: "01:40",
-      booths: [
-        { sector: "entrada", numero: 16 },
-        { sector: "entrada", numero: 12 },
-      ],
-    },
-    {
-      id: 2,
-      start: "01:40",
-      end: "05:00",
-      booths: [{ sector: "entrada", numero: 16 }],
-    },
-    {
-      id: 3,
-      start: "05:00",
       end: "06:00",
       booths: [
-        { sector: "salida", numero: 7 },
-        { sector: "salida", numero: 8 },
+        {
+          sector: "entrada",
+          numero: 16,
+        },
       ],
     },
   ];
 
-  const result = generateSchedule(testAgents, testDemand);
-
-  console.assert(!result.error, "TEST 4: no debería haber error.");
-  console.assert(
-    result.stats.difference <= 1,
-    "TEST 4: la diferencia final debería ser como máximo 1 minuto."
-  );
-
-  const loads = Object.fromEntries(
-    result.schedule.map((agent) => [agent.id, agent.minutes])
-  );
+  const result =
+    generateSchedule(
+      testAgents,
+      testDemand
+    );
 
   console.assert(
-    JSON.stringify(loads) ===
-      JSON.stringify({ 1: 87, 2: 87, 3: 87, 4: 87, 5: 86, 6: 86 }),
-    "TEST 4: distribución esperada 87/87/87/87/86/86."
+    !result.error,
+    "HISTÓRICO: no debería haber error."
+  );
+
+  console.assert(
+    result.stats.globalWork === 390,
+    "HISTÓRICO: la carga global debería ser 390 minutos."
+  );
+
+  console.assert(
+    result.stats.target === 65,
+    "HISTÓRICO: el objetivo debería ser 65 minutos."
+  );
+
+  const agent1 =
+    result.schedule.find(
+      (agent) => agent.id === 1
+    );
+
+  console.assert(
+    agent1.minutes === 35,
+    "HISTÓRICO: Agente 1 debería recibir 35 minutos nuevos."
+  );
+
+  console.assert(
+    agent1.workedMinutes === 30,
+    "HISTÓRICO: Agente 1 debería conservar 30 minutos históricos."
+  );
+
+  console.assert(
+    agent1.workedMinutes +
+      agent1.minutes ===
+      65,
+    "HISTÓRICO: Agente 1 debería terminar con 65 minutos totales."
+  );
+
+  console.assert(
+    result.stats.difference === 0,
+    "HISTÓRICO: la diferencia debería ser 0."
   );
 
   return result;
@@ -791,320 +1343,586 @@ function runPlanningRegressionTest() {
 
 export function runSchedulerTests() {
   const agents = [
-    { id: 1, name: "Juan" },
-    { id: 2, name: "Pedro" },
-    { id: 3, name: "Carlos" },
-    { id: 4, name: "Luis" },
-    { id: 5, name: "Miguel" },
-    { id: 6, name: "Diego" },
-  ];
-
-  // TEST 1
-  // 2 casillas de Entrada durante una hora, arrancando todos en 0.
-  // Con el criterio único (menor carga, menor ID) deben entrar los DOS
-  // PRIMEROS por orden de llegada: Juan (1) y Pedro (2). Por el sesgo
-  // de Entrada (mayor a menor), Juan (más prioritario) debe quedar en
-  // la casilla de numeración más alta: Entrada 2.
-  const test1 = generateSchedule(agents, [
     {
       id: 1,
-      start: "00:00",
-      end: "01:00",
-      booths: [
-        { sector: "entrada", numero: 1 },
-        { sector: "entrada", numero: 2 },
-      ],
+      name: "Juan",
+      workedMinutes: 0,
     },
-  ]);
+    {
+      id: 2,
+      name: "Pedro",
+      workedMinutes: 0,
+    },
+    {
+      id: 3,
+      name: "Carlos",
+      workedMinutes: 0,
+    },
+    {
+      id: 4,
+      name: "Luis",
+      workedMinutes: 0,
+    },
+    {
+      id: 5,
+      name: "Miguel",
+      workedMinutes: 0,
+    },
+    {
+      id: 6,
+      name: "Diego",
+      workedMinutes: 0,
+    },
+  ];
 
-  console.assert(!test1.error, "TEST 1: no debería haber error.");
+  // =======================================================
+  // TEST 1
+  // =======================================================
 
-  const test1Assignments = test1.schedule.flatMap((agent) =>
-    agent.assignments.map((a) => ({ agentId: agent.id, booth: a.booth }))
+  const test1 =
+    generateSchedule(
+      agents,
+      [
+        {
+          id: 1,
+          start: "00:00",
+          end: "01:00",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+            {
+              sector: "entrada",
+              numero: 2,
+            },
+          ],
+        },
+      ]
+    );
+
+  console.assert(
+    !test1.error,
+    "TEST 1: no debería haber error."
+  );
+
+  const test1Assignments =
+    test1.schedule.flatMap(
+      (agent) =>
+        agent.assignments.map(
+          (a) => ({
+            agentId: agent.id,
+            booth: a.booth,
+          })
+        )
+    );
+
+  console.assert(
+    test1Assignments.some(
+      (item) =>
+        item.agentId === 1 &&
+        item.booth ===
+          "Entrada 2"
+    ),
+    "TEST 1: Juan debe estar en Entrada 2."
   );
 
   console.assert(
-    test1Assignments.some((item) => item.agentId === 1 && item.booth === "Entrada 2"),
-    "TEST 1: Juan debe estar en Entrada 2 (preferencial)."
-  );
-  console.assert(
-    test1Assignments.some((item) => item.agentId === 2 && item.booth === "Entrada 1"),
+    test1Assignments.some(
+      (item) =>
+        item.agentId === 2 &&
+        item.booth ===
+          "Entrada 1"
+    ),
     "TEST 1: Pedro debe estar en Entrada 1."
   );
 
+  // =======================================================
   // TEST 2
-  // Escenario descrito por el usuario: 00→00:30 (2 casillas Entrada),
-  // 00:30→05:00 (1 casilla), 05:00→06:00 (4 casillas Salida), 6 agentes.
-  // Los primeros dos agentes cubren el primer bloque; como ya llegan
-  // "cargados" a las 05:00, el segundo bloque rígido lo cubren los
-  // últimos cuatro (inversa). Los minutos restantes se reparten por
-  // orden de llegada en el tramo flexible.
-  const test2 = generateSchedule(agents, [
-    {
-      id: 1,
-      start: "00:00",
-      end: "00:30",
-      booths: [
-        { sector: "entrada", numero: 1 },
-        { sector: "entrada", numero: 2 },
-      ],
-    },
-    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
-    {
-      id: 3,
-      start: "05:00",
-      end: "06:00",
-      booths: [
-        { sector: "salida", numero: 1 },
-        { sector: "salida", numero: 2 },
-        { sector: "salida", numero: 3 },
-        { sector: "salida", numero: 4 },
-      ],
-    },
-  ]);
+  // =======================================================
 
-  console.assert(!test2.error, "TEST 2: no debería haber error.");
+  const test2 =
+    generateSchedule(
+      agents,
+      [
+        {
+          id: 1,
+          start: "00:00",
+          end: "00:30",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+            {
+              sector: "entrada",
+              numero: 2,
+            },
+          ],
+        },
+        {
+          id: 2,
+          start: "00:30",
+          end: "05:00",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+          ],
+        },
+        {
+          id: 3,
+          start: "05:00",
+          end: "06:00",
+          booths: [
+            {
+              sector: "salida",
+              numero: 1,
+            },
+            {
+              sector: "salida",
+              numero: 2,
+            },
+            {
+              sector: "salida",
+              numero: 3,
+            },
+            {
+              sector: "salida",
+              numero: 4,
+            },
+          ],
+        },
+      ]
+    );
 
-  const test2Rigid1 = test2.schedule
-    .filter((a) => a.assignments.some((x) => x.start === 0 && x.end === 30))
-    .map((a) => a.id)
-    .sort();
   console.assert(
-    JSON.stringify(test2Rigid1) === JSON.stringify([1, 2]),
+    !test2.error,
+    "TEST 2: no debería haber error."
+  );
+
+  const test2Rigid1 =
+    test2.schedule
+      .filter((a) =>
+        a.assignments.some(
+          (x) =>
+            x.start === 0 &&
+            x.end === 30
+        )
+      )
+      .map((a) => a.id)
+      .sort();
+
+  console.assert(
+    JSON.stringify(
+      test2Rigid1
+    ) ===
+      JSON.stringify([1, 2]),
     "TEST 2: el primer bloque rígido debe cubrirlo Juan y Pedro."
   );
 
-  const test2Rigid2 = test2.schedule
-    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
-    .map((a) => a.id)
-    .sort();
+  const test2Rigid2 =
+    test2.schedule
+      .filter((a) =>
+        a.assignments.some(
+          (x) =>
+            x.start === 300 &&
+            x.end === 360
+        )
+      )
+      .map((a) => a.id)
+      .sort();
+
   console.assert(
-    JSON.stringify(test2Rigid2) === JSON.stringify([3, 4, 5, 6]),
+    JSON.stringify(
+      test2Rigid2
+    ) ===
+      JSON.stringify([
+        3, 4, 5, 6,
+      ]),
     "TEST 2: el segundo bloque rígido debe cubrirlo Carlos, Luis, Miguel y Diego."
   );
 
-  // TEST 2b — mismo escenario pero con el último bloque de solo 3
-  // casillas (no 4): al haber empate en carga (0) entre Carlos, Luis,
-  // Miguel y Diego, el último bloque rígido debe favorecer a los ID
-  // más altos, dejando a Carlos como el que hace el tramo flexible
-  // completo en vez de compartirlo.
-  const test2b = generateSchedule(agents, [
-    {
-      id: 1,
-      start: "00:00",
-      end: "00:30",
-      booths: [
-        { sector: "entrada", numero: 1 },
-        { sector: "entrada", numero: 2 },
-      ],
-    },
-    { id: 2, start: "00:30", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
-    {
-      id: 3,
-      start: "05:00",
-      end: "06:00",
-      booths: [
-        { sector: "salida", numero: 1 },
-        { sector: "salida", numero: 2 },
-        { sector: "salida", numero: 3 },
-      ],
-    },
-  ]);
+  // =======================================================
+  // TEST 2b
+  // =======================================================
 
-  console.assert(!test2b.error, "TEST 2b: no debería haber error.");
+  const test2b =
+    generateSchedule(
+      agents,
+      [
+        {
+          id: 1,
+          start: "00:00",
+          end: "00:30",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+            {
+              sector: "entrada",
+              numero: 2,
+            },
+          ],
+        },
+        {
+          id: 2,
+          start: "00:30",
+          end: "05:00",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+          ],
+        },
+        {
+          id: 3,
+          start: "05:00",
+          end: "06:00",
+          booths: [
+            {
+              sector: "salida",
+              numero: 1,
+            },
+            {
+              sector: "salida",
+              numero: 2,
+            },
+            {
+              sector: "salida",
+              numero: 3,
+            },
+          ],
+        },
+      ]
+    );
 
-  const test2bRigid2 = test2b.schedule
-    .filter((a) => a.assignments.some((x) => x.start === 300 && x.end === 360))
-    .map((a) => a.id)
-    .sort();
   console.assert(
-    JSON.stringify(test2bRigid2) === JSON.stringify([4, 5, 6]),
-    "TEST 2b: el último bloque (3 casillas) debe cubrirlo Luis, Miguel y Diego, no Carlos."
+    !test2b.error,
+    "TEST 2b: no debería haber error."
   );
 
-  const test2bDiego = test2b.schedule.find((a) => a.id === 6);
-  console.assert(
-    test2bDiego.assignments.some((a) => a.booth === "Salida 3"),
-    "TEST 2b: Diego (ID más alto entre los empatados) debe quedar en Salida 3."
-  );
-
-  // Reparto flexible esperado a mano: total = 570 min / 6 = 95 min c/u.
-  // Juan y Pedro ya tienen 30 min de rígido, Carlos/Luis/Miguel/Diego
-  // ya tienen 60 min. Juan sigue hasta 01:35, Pedro releva hasta 02:40,
-  // Carlos hasta 03:15, Luis hasta 03:50, Miguel hasta 04:25, Diego
-  // hasta 05:00 (donde empalma con su turno rígido).
-  const juan = test2.schedule.find((a) => a.id === 1);
-  const pedro = test2.schedule.find((a) => a.id === 2);
-  const diego = test2.schedule.find((a) => a.id === 6);
+  const test2bRigid2 =
+    test2b.schedule
+      .filter((a) =>
+        a.assignments.some(
+          (x) =>
+            x.start === 300 &&
+            x.end === 360
+        )
+      )
+      .map((a) => a.id)
+      .sort();
 
   console.assert(
-    juan.assignments.some((a) => a.start === 30 && a.end === 95),
-    "TEST 2: Juan debería continuar hasta 01:35."
+    JSON.stringify(
+      test2bRigid2
+    ) ===
+      JSON.stringify([4, 5, 6]),
+    "TEST 2b: el último bloque debe cubrirlo Luis, Miguel y Diego."
   );
-  console.assert(
-    pedro.assignments.some((a) => a.start === 95 && a.end === 160),
-    "TEST 2: Pedro debería relevar hasta 02:40."
-  );
-  console.assert(
-    diego.assignments.some((a) => a.start === 265 && a.end === 300),
-    "TEST 2: Diego debería llegar justo hasta las 05:00."
-  );
-  console.assert(test2.stats.difference <= 1, "TEST 2: la diferencia debería ser mínima.");
 
+  const test2bDiego =
+    test2b.schedule.find(
+      (a) => a.id === 6
+    );
+
+  console.assert(
+    test2bDiego.assignments.some(
+      (a) =>
+        a.booth === "Salida 3"
+    ),
+    "TEST 2b: Diego debe quedar en Salida 3."
+  );
+
+  // =======================================================
   // TEST 3
-  // Orden cronológico en el render: un agente que participa solo en el
-  // bloque rígido tardío no debe listar ese turno antes que uno más
-  // temprano en su propio array de assignments.
+  // =======================================================
+
+  const diego =
+    test2.schedule.find(
+      (a) => a.id === 6
+    );
+
   console.assert(
-    diego.assignments.every((a, i) => i === 0 || diego.assignments[i - 1].start <= a.start),
-    "TEST 3: los turnos de cada agente deben quedar ordenados cronológicamente."
+    diego.assignments.every(
+      (a, i) =>
+        i === 0 ||
+        diego.assignments[
+          i - 1
+        ].start <= a.start
+    ),
+    "TEST 3: los turnos deben quedar ordenados cronológicamente."
   );
 
-  // TEST 3
-  // Escenario "Guardia Nocturna" reportado: 00:00-01:00 (2 casillas
-  // Entrada), 01:00-05:00 (1 casilla flexible), 05:00-06:00 (3 casillas
-  // Salida), 6 agentes. Carlos queda afuera de ambos bloques rígidos y
-  // necesita 90 min en el tramo flexible, pero el orden de llegada debe
-  // respetarse igual: Juan, Pedro, Carlos, Luis, Miguel, Agente 6 — cada
-  // uno toma lo que le falta cuando le toca el turno, sin saltarse a
-  // nadie por tener más o menos minutos pendientes.
+  // =======================================================
+  // TEST 4
+  // =======================================================
+
   const agents3 = [
-    { id: 1, name: "Juan" },
-    { id: 2, name: "Pedro" },
-    { id: 3, name: "Carlos" },
-    { id: 4, name: "Luis" },
-    { id: 5, name: "Miguel" },
-    { id: 6, name: "Agente 6" },
-  ];
-
-  const test3 = generateSchedule(agents3, [
     {
       id: 1,
-      start: "00:00",
-      end: "01:00",
-      booths: [
-        { sector: "entrada", numero: 1 },
-        { sector: "entrada", numero: 2 },
-      ],
+      name: "Juan",
+      workedMinutes: 0,
     },
-    { id: 2, start: "01:00", end: "05:00", booths: [{ sector: "entrada", numero: 1 }] },
+    {
+      id: 2,
+      name: "Pedro",
+      workedMinutes: 0,
+    },
     {
       id: 3,
-      start: "05:00",
-      end: "06:00",
-      booths: [
-        { sector: "salida", numero: 1 },
-        { sector: "salida", numero: 2 },
-        { sector: "salida", numero: 3 },
-      ],
+      name: "Carlos",
+      workedMinutes: 0,
     },
-  ]);
-
-  console.assert(!test3.error, "TEST 3: no debería haber error.");
-
-  const expectedTest3 = [
-    { id: 1, start: 60, end: 90 }, // Juan 01:00-01:30
-    { id: 2, start: 90, end: 120 }, // Pedro 01:30-02:00
-    { id: 3, start: 120, end: 210 }, // Carlos 02:00-03:30
-    { id: 4, start: 210, end: 240 }, // Luis 03:30-04:00
-    { id: 5, start: 240, end: 270 }, // Miguel 04:00-04:30
-    { id: 6, start: 270, end: 300 }, // Agente 6 04:30-05:00
+    {
+      id: 4,
+      name: "Luis",
+      workedMinutes: 0,
+    },
+    {
+      id: 5,
+      name: "Miguel",
+      workedMinutes: 0,
+    },
+    {
+      id: 6,
+      name: "Agente 6",
+      workedMinutes: 0,
+    },
   ];
 
-  for (const expected of expectedTest3) {
-    const agent = test3.schedule.find((a) => a.id === expected.id);
-    const found = agent.assignments.some(
-      (a) => a.start === expected.start && a.end === expected.end
+  const test4 =
+    generateSchedule(
+      agents3,
+      [
+        {
+          id: 1,
+          start: "00:00",
+          end: "01:00",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+            {
+              sector: "entrada",
+              numero: 2,
+            },
+          ],
+        },
+        {
+          id: 2,
+          start: "01:00",
+          end: "05:00",
+          booths: [
+            {
+              sector: "entrada",
+              numero: 1,
+            },
+          ],
+        },
+        {
+          id: 3,
+          start: "05:00",
+          end: "06:00",
+          booths: [
+            {
+              sector: "salida",
+              numero: 1,
+            },
+            {
+              sector: "salida",
+              numero: 2,
+            },
+            {
+              sector: "salida",
+              numero: 3,
+            },
+          ],
+        },
+      ]
     );
-    console.assert(
-      found,
-      `TEST 3: ${agent.name} debería tener un tramo ${minutesToTime(expected.start)} → ${minutesToTime(expected.end)}.`
-    );
-  }
 
-  const test4 = runPlanningRegressionTest();
+  console.assert(
+    !test4.error,
+    "TEST 4: no debería haber error."
+  );
 
-  return { test1, test2, test2b, test3, test4 };
+  console.assert(
+    test4.stats.difference <= 1,
+    "TEST 4: la diferencia debería ser como máximo 1 minuto."
+  );
+
+  // =======================================================
+  // TEST 5 — HISTÓRICO
+  // =======================================================
+
+  const testHistorical =
+    runHistoricalMinutesRegressionTest();
+
+  return {
+    test1,
+    test2,
+    test2b,
+    test4,
+    testHistorical,
+  };
 }
 
 // =========================================================
 // COMPONENTE REACT
 // =========================================================
 
-function BoothPicker({ sector, count, selected, onToggle }) {
-  const numbers = Array.from({ length: count }, (_, i) => i + 1);
+function BoothPicker({
+  sector,
+  count,
+  selected,
+  onToggle,
+}) {
+  const numbers =
+    Array.from(
+      { length: count },
+      (_, i) => i + 1
+    );
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4 }}>
+    <div
+      style={{
+        marginTop: 8,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: "#555",
+          marginBottom: 4,
+        }}
+      >
         {SECTOR_LABEL[sector]}
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {numbers.map((numero) => {
-          const isActive = selected.some((b) => b.sector === sector && b.numero === numero);
-          return (
-            <button
-              key={numero}
-              type="button"
-              onClick={() => onToggle(sector, numero)}
-              style={{
-                minWidth: 30,
-                height: 30,
-                borderRadius: 6,
-                border: isActive ? "1px solid #2563eb" : "1px solid #ccc",
-                background: isActive ? "#2563eb" : "#fff",
-                color: isActive ? "#fff" : "#333",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              {numero}
-            </button>
-          );
-        })}
+
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 6,
+        }}
+      >
+        {numbers.map(
+          (numero) => {
+            const isActive =
+              selected.some(
+                (b) =>
+                  b.sector ===
+                    sector &&
+                  b.numero ===
+                    numero
+              );
+
+            return (
+              <button
+                key={numero}
+                type="button"
+                onClick={() =>
+                  onToggle(
+                    sector,
+                    numero
+                  )
+                }
+                style={{
+                  minWidth: 30,
+                  height: 30,
+                  borderRadius: 6,
+                  border: isActive
+                    ? "1px solid #2563eb"
+                    : "1px solid #ccc",
+                  background:
+                    isActive
+                      ? "#2563eb"
+                      : "#fff",
+                  color: isActive
+                    ? "#fff"
+                    : "#333",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {numero}
+              </button>
+            );
+          }
+        )}
       </div>
     </div>
   );
 }
-function generatePlainTextSchedule(schedule) {
-  // Obtener todos los puntos donde comienza o termina algún turno.
+
+// =========================================================
+// TEXTO PARA COPIAR
+// =========================================================
+
+function generatePlainTextSchedule(
+  schedule
+) {
   const timePoints = [
     ...new Set(
-      schedule.flatMap((agent) =>
-        agent.assignments.flatMap((assignment) => [
-          assignment.start,
-          assignment.end,
-        ])
+      schedule.flatMap(
+        (agent) =>
+          agent.assignments.flatMap(
+            (assignment) => [
+              assignment.start,
+              assignment.end,
+            ]
+          )
       )
     ),
   ].sort((a, b) => a - b);
 
   const rows = [];
 
-  for (let i = 0; i < timePoints.length - 1; i++) {
-    const start = timePoints[i];
-    const end = timePoints[i + 1];
+  for (
+    let i = 0;
+    i <
+    timePoints.length - 1;
+    i++
+  ) {
+    const start =
+      timePoints[i];
 
-    // Buscar todos los agentes que están trabajando durante este bloque.
-    const active = schedule
-      .map((agent) => {
-        const assignment = agent.assignments.find(
-          (a) => a.start <= start && a.end >= end
-        );
+    const end =
+      timePoints[i + 1];
 
-        if (!assignment) return null;
+    const active =
+      schedule
+        .map((agent) => {
+          const assignment =
+            agent.assignments.find(
+              (a) =>
+                a.start <= start &&
+                a.end >= end
+            );
 
-        return {
-          agent: agent.name,
-          booth: assignment.booth,
-        };
-      })
-      .filter(Boolean);
+          if (!assignment) {
+            return null;
+          }
 
-    if (active.length === 0) continue;
+          return {
+            agent: agent.name,
+            booth:
+              assignment.booth,
+          };
+        })
+        .filter(Boolean);
 
-    // Si exactamente la misma asignación continúa, podemos fusionar
-    // posteriormente los bloques.
+    if (active.length === 0) {
+      continue;
+    }
+
     rows.push({
       start,
       end,
@@ -1112,808 +1930,1807 @@ function generatePlainTextSchedule(schedule) {
     });
   }
 
-  // Fusionar intervalos consecutivos cuando tienen exactamente
-  // los mismos agentes/casillas.
   const mergedRows = [];
 
   for (const row of rows) {
-    const previous = mergedRows[mergedRows.length - 1];
+    const previous =
+      mergedRows[
+        mergedRows.length - 1
+      ];
 
     const sameAssignments =
       previous &&
-      JSON.stringify(previous.active) === JSON.stringify(row.active) &&
-      previous.end === row.start;
+      JSON.stringify(
+        previous.active
+      ) ===
+        JSON.stringify(
+          row.active
+        ) &&
+      previous.end ===
+        row.start;
 
     if (sameAssignments) {
       previous.end = row.end;
     } else {
-      mergedRows.push({ ...row });
+      mergedRows.push({
+        ...row,
+      });
     }
   }
 
-  const lines = ["Guardia Nocturna","Hora -> Agente|Casilla"];
+  const lines = [
+    "Guardia Nocturna",
+    "Hora -> Agente|Casilla",
+  ];
 
   for (const row of mergedRows) {
-    const time = `${minutesToShortTime(row.start)}-${minutesToShortTime(row.end)}`;
+    const time =
+      `${minutesToShortTime(
+        row.start
+      )}-${minutesToShortTime(
+        row.end
+      )}`;
 
-    const assignments = row.active
-      .map(({ agent, booth }) => `${agent}/${boothAbbrev(booth)}`)
-      .join("|");
+    const assignments =
+      row.active
+        .map(
+          ({
+            agent,
+            booth,
+          }) =>
+            `${agent}/${boothAbbrev(
+              booth
+            )}`
+        )
+        .join("|");
 
-    lines.push(`${time} ${assignments}`);
+    lines.push(
+      `${time} ${assignments}`
+    );
   }
 
   return lines.join("\n");
 }
 
+// =========================================================
+// APP
+// =========================================================
+
 export default function App() {
-  const [agents, setAgents] = useState(() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.agents);
+  const [agents, setAgents] =
+    useState(() => {
+      try {
+        const saved =
+          localStorage.getItem(
+            STORAGE_KEYS.agents
+          );
 
-    if (saved) {
-      return normalizeAgents(JSON.parse(saved));
+        if (saved) {
+          return normalizeAgents(
+            JSON.parse(saved)
+          );
+        }
+
+        return normalizeAgents(
+          INITIAL_AGENTS.map(
+            (agent) => ({
+              ...agent,
+              uid: createUid(),
+            })
+          )
+        );
+      } catch (error) {
+        console.error(
+          "No se pudieron cargar los agentes:",
+          error
+        );
+
+        return normalizeAgents(
+          INITIAL_AGENTS.map(
+            (agent) => ({
+              ...agent,
+              uid: createUid(),
+            })
+          )
+        );
+      }
+    });
+
+  const [demand, setDemand] =
+    useState(() => {
+      try {
+        const saved =
+          localStorage.getItem(
+            STORAGE_KEYS.demand
+          );
+
+        if (saved) {
+          return normalizeDemand(
+            JSON.parse(saved)
+          );
+        }
+
+        return INITIAL_DEMAND;
+      } catch (error) {
+        console.error(
+          "No se pudo cargar la demanda:",
+          error
+        );
+
+        return INITIAL_DEMAND;
+      }
+    });
+
+  const agentInputRefs =
+    useRef({});
+
+  const workedMinutesRefs =
+    useRef({});
+
+  const demandStartRefs =
+    useRef({});
+
+  const demandEndRefs =
+    useRef({});
+
+  const draggedAgentUid =
+    useRef(null);
+
+  const draggedDemandId =
+    useRef(null);
+
+  // =======================================================
+  // LOCAL STORAGE
+  // =======================================================
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.agents,
+        JSON.stringify(agents)
+      );
+    } catch (error) {
+      console.error(
+        "No se pudieron guardar los agentes:",
+        error
+      );
     }
+  }, [agents]);
 
-    return normalizeAgents(
-      INITIAL_AGENTS.map((agent) => ({
-        ...agent,
-        uid: createUid(),
-      }))
-    );
-  } catch (error) {
-    console.error("No se pudieron cargar los agentes:", error);
-
-    return normalizeAgents(
-      INITIAL_AGENTS.map((agent) => ({
-        ...agent,
-        uid: createUid(),
-      }))
-    );
-  }
-});
-
-const [demand, setDemand] = useState(() => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.demand);
-
-    if (saved) {
-      return normalizeDemand(JSON.parse(saved));
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.demand,
+        JSON.stringify(demand)
+      );
+    } catch (error) {
+      console.error(
+        "No se pudo guardar la demanda:",
+        error
+      );
     }
+  }, [demand]);
 
-    return INITIAL_DEMAND;
-  } catch (error) {
-    console.error("No se pudo cargar la demanda:", error);
-    return INITIAL_DEMAND;
-  }
-});
-
-  const agentInputRefs = useRef({});
-const demandStartRefs = useRef({});
-const demandEndRefs = useRef({});
-
-const draggedAgentUid = useRef(null);
-const draggedDemandId = useRef(null);
-
-useEffect(() => {
-  try {
-    localStorage.setItem(
-      STORAGE_KEYS.agents,
-      JSON.stringify(agents)
-    );
-  } catch (error) {
-    console.error("No se pudieron guardar los agentes:", error);
-  }
-}, [agents]);
-
-useEffect(() => {
-  try {
-    localStorage.setItem(
-      STORAGE_KEYS.demand,
-      JSON.stringify(demand)
-    );
-  } catch (error) {
-    console.error("No se pudo guardar la demanda:", error);
-  }
-}, [demand]);
+  // =======================================================
+  // RESET
+  // =======================================================
 
   function resetData() {
-  const confirmed = window.confirm(
-    "¿Querés borrar todos los agentes y horarios y volver a los valores iniciales?"
+    const confirmed =
+      window.confirm(
+        "¿Querés borrar todos los agentes y horarios y volver a los valores iniciales?"
+      );
+
+    if (!confirmed) return;
+
+    localStorage.removeItem(
+      STORAGE_KEYS.agents
+    );
+
+    localStorage.removeItem(
+      STORAGE_KEYS.demand
+    );
+
+    setAgents(
+      INITIAL_AGENTS.map(
+        (agent) => ({
+          ...agent,
+          uid: createUid(),
+        })
+      )
+    );
+
+    setDemand(
+      INITIAL_DEMAND
+    );
+  }
+
+  // =======================================================
+  // RESULTADO
+  // =======================================================
+
+  const result = useMemo(
+    () =>
+      generateSchedule(
+        agents,
+        demand
+      ),
+    [agents, demand]
   );
 
-  if (!confirmed) return;
-
-  localStorage.removeItem(STORAGE_KEYS.agents);
-  localStorage.removeItem(STORAGE_KEYS.demand);
-
- setAgents(
-  INITIAL_AGENTS.map((agent) => ({
-    ...agent,
-    uid: createUid(),
-  }))
-);
-  setDemand(INITIAL_DEMAND);
-}
-  const result = useMemo(() => generateSchedule(agents, demand), [agents, demand]);
+  // =======================================================
+  // AGENTES
+  // =======================================================
 
   function focusAgent(uid) {
-  requestAnimationFrame(() => {
-    agentInputRefs.current[uid]?.focus();
-    agentInputRefs.current[uid]?.select();
-  });
-}
+    requestAnimationFrame(() => {
+      agentInputRefs.current[
+        uid
+      ]?.focus();
 
-function addAgent() {
-  const newAgent = {
-    uid: createUid(),
-    id: agents.length + 1,
-    name: `Agente ${agents.length + 1}`,
-  };
-
-  setAgents((current) => [...current, newAgent]);
-
-  focusAgent(newAgent.uid);
-}
-
-function removeAgent(id) {
-  setAgents((current) => {
-    const updated = current.filter((agent) => agent.id !== id);
-    return renumberAgents(updated);
-  });
-}
-
-function updateAgent(id, name) {
-  setAgents((current) =>
-    current.map((agent) =>
-      agent.id === id ? { ...agent, name } : agent
-    )
-  );
-}
-
-function handleAgentKeyDown(event, agent) {
-  if (event.key !== "Enter") return;
-
-  event.preventDefault();
-
-  const index = agents.findIndex((item) => item.uid === agent.uid);
-
-  // Enter en el último agente → crear uno nuevo.
-  if (index === agents.length - 1) {
-    addAgent();
-    return;
+      agentInputRefs.current[
+        uid
+      ]?.select();
+    });
   }
 
-  // Enter en un agente existente → siguiente agente.
-  const nextAgent = agents[index + 1];
+  function focusWorkedMinutes(
+    uid
+  ) {
+    requestAnimationFrame(() => {
+      workedMinutesRefs.current[
+        uid
+      ]?.focus();
 
-  focusAgent(nextAgent.uid);
-}
+      workedMinutesRefs.current[
+        uid
+      ]?.select();
+    });
+  }
 
-  function reorderAgents(sourceUid, targetUid) {
-  if (!sourceUid || !targetUid || sourceUid === targetUid) return;
+  function addAgent() {
+    const newAgent = {
+      uid: createUid(),
+      id: agents.length + 1,
+      name:
+        `Agente ${agents.length + 1}`,
+      workedMinutes: 0,
+    };
 
-  setAgents((current) => {
-    const sourceIndex = current.findIndex(
-      (agent) => agent.uid === sourceUid
+    setAgents((current) => [
+      ...current,
+      newAgent,
+    ]);
+
+    focusAgent(
+      newAgent.uid
     );
+  }
 
-    const targetIndex = current.findIndex(
-      (agent) => agent.uid === targetUid
+  function removeAgent(id) {
+    setAgents((current) => {
+      const updated =
+        current.filter(
+          (agent) =>
+            agent.id !== id
+        );
+
+      return renumberAgents(
+        updated
+      );
+    });
+  }
+
+  function updateAgent(
+    id,
+    name
+  ) {
+    setAgents((current) =>
+      current.map((agent) =>
+        agent.id === id
+          ? {
+              ...agent,
+              name,
+            }
+          : agent
+      )
     );
+  }
 
-    if (sourceIndex === -1 || targetIndex === -1) {
-      return current;
+  function updateAgentWorkedMinutes(
+    id,
+    value
+  ) {
+    const minutes =
+      normalizeWorkedMinutes(
+        value
+      );
+
+    setAgents((current) =>
+      current.map((agent) =>
+        agent.id === id
+          ? {
+              ...agent,
+              workedMinutes:
+                minutes,
+            }
+          : agent
+      )
+    );
+  }
+
+  function handleAgentKeyDown(
+    event,
+    agent
+  ) {
+    if (event.key !== "Enter") {
+      return;
     }
 
-    const updated = [...current];
-    const [moved] = updated.splice(sourceIndex, 1);
+    event.preventDefault();
 
-    updated.splice(targetIndex, 0, moved);
+    const index =
+      agents.findIndex(
+        (item) =>
+          item.uid === agent.uid
+      );
 
-    return renumberAgents(updated);
-  });
-}
-
-function moveAgent(agentUid, direction) {
-  setAgents((current) => {
-    const index = current.findIndex(
-      (agent) => agent.uid === agentUid
-    );
-
-    if (index === -1) return current;
-
-    const targetIndex = index + direction;
-
-    if (targetIndex < 0 || targetIndex >= current.length) {
-      return current;
+    if (
+      index ===
+      agents.length - 1
+    ) {
+      addAgent();
+      return;
     }
 
-    const updated = [...current];
-    [updated[index], updated[targetIndex]] = [
-      updated[targetIndex],
-      updated[index],
-    ];
+    const nextAgent =
+      agents[index + 1];
 
-    return renumberAgents(updated);
-  });
+    focusAgent(
+      nextAgent.uid
+    );
+  }
 
-  requestAnimationFrame(() => {
-    agentInputRefs.current[agentUid]?.focus();
-  });
-}
+  function reorderAgents(
+    sourceUid,
+    targetUid
+  ) {
+    if (
+      !sourceUid ||
+      !targetUid ||
+      sourceUid === targetUid
+    ) {
+      return;
+    }
 
-function handleAgentDragStart(event, agent) {
-  draggedAgentUid.current = agent.uid;
+    setAgents((current) => {
+      const sourceIndex =
+        current.findIndex(
+          (agent) =>
+            agent.uid ===
+            sourceUid
+        );
 
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData("text/plain", agent.uid);
-}
+      const targetIndex =
+        current.findIndex(
+          (agent) =>
+            agent.uid ===
+            targetUid
+        );
 
-function handleAgentDragOver(event) {
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-}
+      if (
+        sourceIndex === -1 ||
+        targetIndex === -1
+      ) {
+        return current;
+      }
 
-function handleAgentDrop(event, targetAgent) {
-  event.preventDefault();
+      const updated = [
+        ...current,
+      ];
 
-  const sourceUid =
-    event.dataTransfer.getData("text/plain") ||
-    draggedAgentUid.current;
+      const [moved] =
+        updated.splice(
+          sourceIndex,
+          1
+        );
 
-  reorderAgents(sourceUid, targetAgent.uid);
+      updated.splice(
+        targetIndex,
+        0,
+        moved
+      );
 
-  draggedAgentUid.current = null;
-}
+      return renumberAgents(
+        updated
+      );
+    });
+  }
 
-function handleAgentDragEnd() {
-  draggedAgentUid.current = null;
-}
+  function moveAgent(
+    agentUid,
+    direction
+  ) {
+    setAgents((current) => {
+      const index =
+        current.findIndex(
+          (agent) =>
+            agent.uid ===
+            agentUid
+        );
+
+      if (index === -1) {
+        return current;
+      }
+
+      const targetIndex =
+        index + direction;
+
+      if (
+        targetIndex < 0 ||
+        targetIndex >=
+          current.length
+      ) {
+        return current;
+      }
+
+      const updated = [
+        ...current,
+      ];
+
+      [
+        updated[index],
+        updated[targetIndex],
+      ] = [
+        updated[targetIndex],
+        updated[index],
+      ];
+
+      return renumberAgents(
+        updated
+      );
+    });
+
+    requestAnimationFrame(() => {
+      agentInputRefs.current[
+        agentUid
+      ]?.focus();
+    });
+  }
+
+  function handleAgentDragStart(
+    event,
+    agent
+  ) {
+    draggedAgentUid.current =
+      agent.uid;
+
+    event.dataTransfer.effectAllowed =
+      "move";
+
+    event.dataTransfer.setData(
+      "text/plain",
+      agent.uid
+    );
+  }
+
+  function handleAgentDragOver(
+    event
+  ) {
+    event.preventDefault();
+
+    event.dataTransfer.dropEffect =
+      "move";
+  }
+
+  function handleAgentDrop(
+    event,
+    targetAgent
+  ) {
+    event.preventDefault();
+
+    const sourceUid =
+      event.dataTransfer.getData(
+        "text/plain"
+      ) ||
+      draggedAgentUid.current;
+
+    reorderAgents(
+      sourceUid,
+      targetAgent.uid
+    );
+
+    draggedAgentUid.current =
+      null;
+  }
+
+  function handleAgentDragEnd() {
+    draggedAgentUid.current =
+      null;
+  }
+
+  // =======================================================
+  // DEMANDA
+  // =======================================================
 
   function focusDemandStart(id) {
-  requestAnimationFrame(() => {
-    demandStartRefs.current[id]?.focus();
-  });
-}
-
-function focusDemandEnd(id) {
-  requestAnimationFrame(() => {
-    demandEndRefs.current[id]?.focus();
-  });
-}
-
-function addDemand() {
-  const lastDemand = demand[demand.length - 1];
-
-  const newDemand = {
-    id: demand.length + 1,
-    start: lastDemand?.end || "00:00",
-    end: lastDemand?.end || "01:00",
-    booths: [],
-  };
-
-  setDemand((current) => [...current, newDemand]);
-
-  focusDemandStart(newDemand.id);
-}
-
-function removeDemand(id) {
-  setDemand((current) => {
-    const updated = current.filter((item) => item.id !== id);
-    return renumberDemand(updated);
-  });
-}
-
-function updateDemand(id, field, value) {
-  setDemand((current) =>
-    current.map((item) =>
-      item.id === id
-        ? { ...item, [field]: value }
-        : item
-    )
-  );
-}
-
-function handleDemandStartKeyDown(event, item) {
-  if (event.key !== "Enter") return;
-
-  event.preventDefault();
-
-  focusDemandEnd(item.id);
-}
-
-function handleDemandEndKeyDown(event, item) {
-  if (event.key !== "Enter") return;
-
-  event.preventDefault();
-
-  const index = demand.findIndex(
-    (current) => current.id === item.id
-  );
-
-  // Si no es la última demanda, ir a la siguiente.
-  if (index < demand.length - 1) {
-    focusDemandStart(demand[index + 1].id);
-    return;
+    requestAnimationFrame(() => {
+      demandStartRefs.current[
+        id
+      ]?.focus();
+    });
   }
 
-  // Si es la última, crear otra.
-  addDemand();
-}
+  function focusDemandEnd(id) {
+    requestAnimationFrame(() => {
+      demandEndRefs.current[
+        id
+      ]?.focus();
+    });
+  }
 
-  function reorderDemand(sourceId, targetId) {
-  if (sourceId === targetId) return;
+  function addDemand() {
+    const lastDemand =
+      demand[demand.length - 1];
 
-  setDemand((current) => {
-    const sourceIndex = current.findIndex(
-      (item) => item.id === sourceId
+    const newDemand = {
+      id: demand.length + 1,
+      start:
+        lastDemand?.end ||
+        "00:00",
+      end:
+        lastDemand?.end ||
+        "01:00",
+      booths: [],
+    };
+
+    setDemand((current) => [
+      ...current,
+      newDemand,
+    ]);
+
+    focusDemandStart(
+      newDemand.id
     );
+  }
 
-    const targetIndex = current.findIndex(
-      (item) => item.id === targetId
+  function removeDemand(id) {
+    setDemand((current) => {
+      const updated =
+        current.filter(
+          (item) =>
+            item.id !== id
+        );
+
+      return renumberDemand(
+        updated
+      );
+    });
+  }
+
+  function updateDemand(
+    id,
+    field,
+    value
+  ) {
+    setDemand((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              [field]: value,
+            }
+          : item
+      )
     );
+  }
 
-    if (sourceIndex === -1 || targetIndex === -1) {
-      return current;
+  function handleDemandStartKeyDown(
+    event,
+    item
+  ) {
+    if (event.key !== "Enter") {
+      return;
     }
 
-    const updated = [...current];
-    const [moved] = updated.splice(sourceIndex, 1);
+    event.preventDefault();
 
-    updated.splice(targetIndex, 0, moved);
-
-    return renumberDemand(updated);
-  });
-}
-
-function moveDemand(id, direction) {
-  setDemand((current) => {
-    const index = current.findIndex(
-      (item) => item.id === id
+    focusDemandEnd(
+      item.id
     );
+  }
 
-    if (index === -1) return current;
-
-    const targetIndex = index + direction;
-
-    if (targetIndex < 0 || targetIndex >= current.length) {
-      return current;
+  function handleDemandEndKeyDown(
+    event,
+    item
+  ) {
+    if (event.key !== "Enter") {
+      return;
     }
 
-    const updated = [...current];
+    event.preventDefault();
 
-    [updated[index], updated[targetIndex]] = [
-      updated[targetIndex],
-      updated[index],
-    ];
+    const index =
+      demand.findIndex(
+        (current) =>
+          current.id ===
+          item.id
+      );
 
-    return renumberDemand(updated);
-  });
+    if (
+      index <
+      demand.length - 1
+    ) {
+      focusDemandStart(
+        demand[index + 1].id
+      );
 
-  requestAnimationFrame(() => {
-    demandStartRefs.current[id]?.focus();
-  });
-}
+      return;
+    }
 
-function handleDemandDragStart(event, item) {
-  draggedDemandId.current = item.id;
+    addDemand();
+  }
 
-  event.dataTransfer.effectAllowed = "move";
-  event.dataTransfer.setData(
-    "text/plain",
-    String(item.id)
-  );
-}
+  function reorderDemand(
+    sourceId,
+    targetId
+  ) {
+    if (
+      sourceId === targetId
+    ) {
+      return;
+    }
 
-function handleDemandDragOver(event) {
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "move";
-}
+    setDemand((current) => {
+      const sourceIndex =
+        current.findIndex(
+          (item) =>
+            item.id ===
+            sourceId
+        );
 
-function handleDemandDrop(event, targetItem) {
-  event.preventDefault();
+      const targetIndex =
+        current.findIndex(
+          (item) =>
+            item.id ===
+            targetId
+        );
 
-  const sourceId = Number(
-    event.dataTransfer.getData("text/plain")
-  ) || draggedDemandId.current;
+      if (
+        sourceIndex === -1 ||
+        targetIndex === -1
+      ) {
+        return current;
+      }
 
-  reorderDemand(sourceId, targetItem.id);
+      const updated = [
+        ...current,
+      ];
 
-  draggedDemandId.current = null;
-}
+      const [moved] =
+        updated.splice(
+          sourceIndex,
+          1
+        );
 
-function handleDemandDragEnd() {
-  draggedDemandId.current = null;
-}
+      updated.splice(
+        targetIndex,
+        0,
+        moved
+      );
 
-  function toggleBooth(demandId, sector, numero) {
+      return renumberDemand(
+        updated
+      );
+    });
+  }
+
+  function moveDemand(
+    id,
+    direction
+  ) {
+    setDemand((current) => {
+      const index =
+        current.findIndex(
+          (item) =>
+            item.id === id
+        );
+
+      if (index === -1) {
+        return current;
+      }
+
+      const targetIndex =
+        index + direction;
+
+      if (
+        targetIndex < 0 ||
+        targetIndex >=
+          current.length
+      ) {
+        return current;
+      }
+
+      const updated = [
+        ...current,
+      ];
+
+      [
+        updated[index],
+        updated[targetIndex],
+      ] = [
+        updated[targetIndex],
+        updated[index],
+      ];
+
+      return renumberDemand(
+        updated
+      );
+    });
+
+    requestAnimationFrame(() => {
+      demandStartRefs.current[
+        id
+      ]?.focus();
+    });
+  }
+
+  function handleDemandDragStart(
+    event,
+    item
+  ) {
+    draggedDemandId.current =
+      item.id;
+
+    event.dataTransfer.effectAllowed =
+      "move";
+
+    event.dataTransfer.setData(
+      "text/plain",
+      String(item.id)
+    );
+  }
+
+  function handleDemandDragOver(
+    event
+  ) {
+    event.preventDefault();
+
+    event.dataTransfer.dropEffect =
+      "move";
+  }
+
+  function handleDemandDrop(
+    event,
+    targetItem
+  ) {
+    event.preventDefault();
+
+    const sourceId =
+      Number(
+        event.dataTransfer.getData(
+          "text/plain"
+        )
+      ) ||
+      draggedDemandId.current;
+
+    reorderDemand(
+      sourceId,
+      targetItem.id
+    );
+
+    draggedDemandId.current =
+      null;
+  }
+
+  function handleDemandDragEnd() {
+    draggedDemandId.current =
+      null;
+  }
+
+  function toggleBooth(
+    demandId,
+    sector,
+    numero
+  ) {
     setDemand(
       demand.map((item) => {
-        if (item.id !== demandId) return item;
-        const exists = item.booths.some((b) => b.sector === sector && b.numero === numero);
+        if (
+          item.id !==
+          demandId
+        ) {
+          return item;
+        }
+
+        const exists =
+          item.booths.some(
+            (b) =>
+              b.sector ===
+                sector &&
+              b.numero ===
+                numero
+          );
+
         const booths = exists
-          ? item.booths.filter((b) => !(b.sector === sector && b.numero === numero))
-          : [...item.booths, { sector, numero }];
-        return { ...item, booths };
+          ? item.booths.filter(
+              (b) =>
+                !(
+                  b.sector ===
+                    sector &&
+                  b.numero ===
+                    numero
+                )
+            )
+          : [
+              ...item.booths,
+              {
+                sector,
+                numero,
+              },
+            ];
+
+        return {
+          ...item,
+          booths,
+        };
       })
     );
   }
 
+  // =======================================================
+  // COPIAR
+  // =======================================================
+
   async function copyPlainTextSchedule() {
-    if (!result.schedule?.length) return;
-    const text = generatePlainTextSchedule(result.schedule);
+    if (
+      !result.schedule?.length
+    ) {
+      return;
+    }
+
+    const text =
+      generatePlainTextSchedule(
+        result.schedule
+      );
+
     try {
-      await navigator.clipboard.writeText(text);
-      alert("Horario copiado al portapapeles.");
+      await navigator.clipboard.writeText(
+        text
+      );
+
+      alert(
+        "Horario copiado al portapapeles."
+      );
     } catch (error) {
-      console.error("No se pudo copiar el horario:", error);
-      alert("No se pudo copiar el horario.");
+      console.error(
+        "No se pudo copiar el horario:",
+        error
+      );
+
+      alert(
+        "No se pudo copiar el horario."
+      );
     }
   }
-  
+
+  // =======================================================
+  // RENDER
+  // =======================================================
+
   return (
     <div className="app">
       <div className="container">
+
         <header className="header">
-          <h1>Gestión de horarios</h1>
-          <p>Distribución automática de agentes y casillas</p>
+          <h1>
+            Gestión de horarios
+          </h1>
+
+          <p>
+            Distribución automática de agentes y casillas
+          </p>
         </header>
+
+        {/* =================================================
+            AGENTES
+        ================================================= */}
 
         <section className="card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">Agentes</h2>
-              <p className="card-description">El ID determina el orden de llegada.</p>
+              <h2 className="card-title">
+                Agentes
+              </h2>
+
+              <p className="card-description">
+                El ID determina el orden de llegada.
+                Los minutos ya trabajados se tienen
+                en cuenta para equilibrar la carga total.
+              </p>
             </div>
           </div>
+
           <div className="agent-list">
-            {agents.map((agent, index) => (
-              <div
-                key={agent.uid}
-                className="agent-row"
-                draggable
-                onDragStart={(event) => handleAgentDragStart(event, agent)}
-                onDragOver={handleAgentDragOver}
-                onDrop={(event) => handleAgentDrop(event, agent)}
-                onDragEnd={handleAgentDragEnd}
-                style={{
-                  cursor: "grab",
-                }}
-              >
+            {agents.map(
+              (agent, index) => (
                 <div
-          className="agent-number"
-      title="Arrastrar para cambiar el orden"
-      aria-label={`Agente ${agent.id}. Arrastrar para cambiar el orden.`}
-    >
-      ⋮⋮
-    </div>
+                  key={agent.uid}
+                  className="agent-row"
+                  draggable
+                  onDragStart={(
+                    event
+                  ) =>
+                    handleAgentDragStart(
+                      event,
+                      agent
+                    )
+                  }
+                  onDragOver={
+                    handleAgentDragOver
+                  }
+                  onDrop={(event) =>
+                    handleAgentDrop(
+                      event,
+                      agent
+                    )
+                  }
+                  onDragEnd={
+                    handleAgentDragEnd
+                  }
+                  style={{
+                    cursor: "grab",
+                  }}
+                >
+                  {/* DRAG */}
 
-    <div
-      style={{
-        minWidth: 28,
-        textAlign: "center",
-        fontWeight: 700,
-      }}
-    >
-      {agent.id}
-    </div>
+                  <div
+                    className="agent-number"
+                    title="Arrastrar para cambiar el orden"
+                    aria-label={`Agente ${agent.id}. Arrastrar para cambiar el orden.`}
+                  >
+                    ⋮⋮
+                  </div>
 
-    <input
-      ref={(element) => {
-        agentInputRefs.current[agent.uid] = element;
-      }}
-      className="input input-name"
-      value={agent.name}
-      placeholder={`Agente ${agent.id}`}
-      autoFocus={index === 0}
-      onChange={(event) =>
-        updateAgent(agent.id, event.target.value)
-      }
-      onKeyDown={(event) =>
-        handleAgentKeyDown(event, agent)
-      }
-      aria-label={`Nombre del agente ${agent.id}`}
-    />
+                  {/* ID */}
 
-    <button
-      type="button"
-      className="button button-secondary"
-      onClick={() => moveAgent(agent.uid, -1)}
-      disabled={index === 0}
-      aria-label={`Subir agente ${agent.id}`}
-      title="Subir"
-    >
-      ↑
-    </button>
+                  <div
+                    style={{
+                      minWidth: 28,
+                      textAlign:
+                        "center",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {agent.id}
+                  </div>
 
-    <button
-      type="button"
-      className="button button-secondary"
-      onClick={() => moveAgent(agent.uid, 1)}
-      disabled={index === agents.length - 1}
-      aria-label={`Bajar agente ${agent.id}`}
-      title="Bajar"
-    >
-      ↓
-    </button>
+                  {/* NOMBRE */}
 
-    <button
-      type="button"
-      className="button button-danger"
-      onClick={() => removeAgent(agent.id)}
-    >
-      Eliminar
-    </button>
-  </div>
-))}
+                  <input
+                    ref={(element) => {
+                      agentInputRefs.current[
+                        agent.uid
+                      ] =
+                        element;
+                    }}
+                    className="input input-name"
+                    value={
+                      agent.name
+                    }
+                    placeholder={`Agente ${agent.id}`}
+                    autoFocus={
+                      index === 0
+                    }
+                    onChange={(
+                      event
+                    ) =>
+                      updateAgent(
+                        agent.id,
+                        event.target
+                          .value
+                      )
+                    }
+                    onKeyDown={(
+                      event
+                    ) =>
+                      handleAgentKeyDown(
+                        event,
+                        agent
+                      )
+                    }
+                    aria-label={`Nombre del agente ${agent.id}`}
+                  />
+
+                  {/* MINUTOS PREVIOS */}
+
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      alignItems:
+                        "center",
+                      gap: 6,
+                    }}
+                  >
+                    <label
+                      style={{
+                        fontSize: 12,
+                        color:
+                          "#666",
+                        whiteSpace:
+                          "nowrap",
+                      }}
+                    >
+                      Ya trabajó
+                    </label>
+
+                    <input
+                      ref={(element) => {
+                        workedMinutesRefs.current[
+                          agent.uid
+                        ] =
+                          element;
+                      }}
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={
+                        agent.workedMinutes ??
+                        0
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        updateAgentWorkedMinutes(
+                          agent.id,
+                          event.target
+                            .value
+                        )
+                      }
+                      onKeyDown={(
+                        event
+                      ) => {
+                        if (
+                          event.key ===
+                          "Enter"
+                        ) {
+                          event.preventDefault();
+
+                          const nextAgent =
+                            agents[
+                              index + 1
+                            ];
+
+                          if (
+                            nextAgent
+                          ) {
+                            focusAgent(
+                              nextAgent.uid
+                            );
+                          }
+                        }
+                      }}
+                      style={{
+                        width: 80,
+                      }}
+                      aria-label={`Minutos ya trabajados por el agente ${agent.id}`}
+                      title="Minutos trabajados antes de esta planificación"
+                    />
+
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color:
+                          "#777",
+                      }}
+                    >
+                      min
+                    </span>
+                  </div>
+
+                  {/* SUBIR */}
+
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() =>
+                      moveAgent(
+                        agent.uid,
+                        -1
+                      )
+                    }
+                    disabled={
+                      index === 0
+                    }
+                    aria-label={`Subir agente ${agent.id}`}
+                    title="Subir"
+                  >
+                    ↑
+                  </button>
+
+                  {/* BAJAR */}
+
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() =>
+                      moveAgent(
+                        agent.uid,
+                        1
+                      )
+                    }
+                    disabled={
+                      index ===
+                      agents.length -
+                        1
+                    }
+                    aria-label={`Bajar agente ${agent.id}`}
+                    title="Bajar"
+                  >
+                    ↓
+                  </button>
+
+                  {/* ELIMINAR */}
+
+                  <button
+                    type="button"
+                    className="button button-danger"
+                    onClick={() =>
+                      removeAgent(
+                        agent.id
+                      )
+                    }
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              )
+            )}
           </div>
 
-          <button className="button button-primary" onClick={addAgent}>
+          <button
+            className="button button-primary"
+            onClick={
+              addAgent
+            }
+          >
             + Agregar agente
           </button>
         </section>
 
-        <section style={{ marginTop: 40 }}>
-          <h2>Horarios de casillas</h2>
+        {/* =================================================
+            DEMANDA
+        ================================================= */}
+
+        <section
+          style={{
+            marginTop: 40,
+          }}
+        >
+          <h2>
+            Horarios de casillas
+          </h2>
+
           <p>
-            Los bloques finales con varias casillas se mantienen completos y
-            funcionan como reserva. Los bloques multicasilla anteriores se
-            rotan operativamente; las casillas individuales completan la carga
-            restante según el objetivo global. El orden de llegada determina
-            la prioridad y, al asignar casillas, el agente prioritario recibe
-            la preferencial de cada sector (Entrada: mayor numeración primero;
-            Salida: menor numeración primero).
+            Los bloques finales con varias casillas se
+            mantienen completos y funcionan como reserva.
+            Los bloques multicasilla anteriores se rotan
+            operativamente. Las casillas individuales
+            completan la carga restante según el objetivo
+            global. Los minutos ya trabajados por cada agente
+            se descuentan de lo que necesita trabajar ahora.
+            El orden de llegada determina la prioridad.
           </p>
-<div className="demand-list">
-  {demand.map((item, index) => (
-    <div
-      key={item.id}
-      className="demand-row"
-      draggable
-      onDragStart={(event) =>
-        handleDemandDragStart(event, item)
-      }
-      onDragOver={handleDemandDragOver}
-      onDrop={(event) =>
-        handleDemandDrop(event, item)
-      }
-      onDragEnd={handleDemandDragEnd}
-      style={{
-        flexDirection: "column",
-        alignItems: "stretch",
-        cursor: "grab",
-      }}
-    >
-      {/* CABECERA DEL INTERVALO */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        {/* Indicador de drag */}
-        <div
-          title="Arrastrar para cambiar el orden"
-          aria-label={`Intervalo ${item.id}. Arrastrar para cambiar el orden.`}
-          style={{
-            fontWeight: 700,
-            minWidth: 20,
-            cursor: "grab",
-            userSelect: "none",
-            color: "#777",
-          }}
-        >
-          ⋮⋮
-        </div>
 
-        {/* Número del intervalo */}
-        <strong style={{ minWidth: 24 }}>
-          {item.id}
-        </strong>
+          <div className="demand-list">
+            {demand.map(
+              (item, index) => (
+                <div
+                  key={item.id}
+                  className="demand-row"
+                  draggable
+                  onDragStart={(
+                    event
+                  ) =>
+                    handleDemandDragStart(
+                      event,
+                      item
+                    )
+                  }
+                  onDragOver={
+                    handleDemandDragOver
+                  }
+                  onDrop={(event) =>
+                    handleDemandDrop(
+                      event,
+                      item
+                    )
+                  }
+                  onDragEnd={
+                    handleDemandDragEnd
+                  }
+                  style={{
+                    flexDirection:
+                      "column",
+                    alignItems:
+                      "stretch",
+                    cursor: "grab",
+                  }}
+                >
+                  {/* CABECERA */}
 
-        {/* INICIO */}
-        <input
-          ref={(element) => {
-            demandStartRefs.current[item.id] = element;
-          }}
-          className="input input-time"
-          type="time"
-          value={item.start}
-          onChange={(event) =>
-            updateDemand(item.id, "start", event.target.value)
-          }
-          onKeyDown={(event) =>
-            handleDemandStartKeyDown(event, item)
-          }
-          aria-label={`Comienzo del intervalo ${item.id}`}
-        />
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      alignItems:
+                        "center",
+                      gap: 8,
+                    }}
+                  >
+                    <div
+                      title="Arrastrar para cambiar el orden"
+                      aria-label={`Intervalo ${item.id}. Arrastrar para cambiar el orden.`}
+                      style={{
+                        fontWeight: 700,
+                        minWidth: 20,
+                        cursor:
+                          "grab",
+                        userSelect:
+                          "none",
+                        color:
+                          "#777",
+                      }}
+                    >
+                      ⋮⋮
+                    </div>
 
-        <span className="time-arrow">→</span>
+                    <strong
+                      style={{
+                        minWidth: 24,
+                      }}
+                    >
+                      {item.id}
+                    </strong>
 
-        {/* FIN */}
-        <input
-          ref={(element) => {
-            demandEndRefs.current[item.id] = element;
-          }}
-          className="input input-time"
-          type="time"
-          value={item.end}
-          onChange={(event) =>
-            updateDemand(item.id, "end", event.target.value)
-          }
-          onKeyDown={(event) =>
-            handleDemandEndKeyDown(event, item)
-          }
-          aria-label={`Final del intervalo ${item.id}`}
-        />
+                    {/* INICIO */}
 
-        {/* Cantidad de casillas */}
-        <span
-          style={{
-            fontSize: 12,
-            color: "#777",
-          }}
-        >
-          {item.booths.length} casilla
-          {item.booths.length === 1 ? "" : "s"} seleccionada
-          {item.booths.length === 1 ? "" : "s"}
-        </span>
+                    <input
+                      ref={(
+                        element
+                      ) => {
+                        demandStartRefs.current[
+                          item.id
+                        ] =
+                          element;
+                      }}
+                      className="input input-time"
+                      type="time"
+                      value={
+                        item.start
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        updateDemand(
+                          item.id,
+                          "start",
+                          event.target
+                            .value
+                        )
+                      }
+                      onKeyDown={(
+                        event
+                      ) =>
+                        handleDemandStartKeyDown(
+                          event,
+                          item
+                        )
+                      }
+                      aria-label={`Comienzo del intervalo ${item.id}`}
+                    />
 
-        {/* SUBIR */}
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={() => moveDemand(item.id, -1)}
-          disabled={index === 0}
-          aria-label={`Subir intervalo ${item.id}`}
-          title="Subir"
-        >
-          ↑
-        </button>
+                    <span className="time-arrow">
+                      →
+                    </span>
 
-        {/* BAJAR */}
-        <button
-          type="button"
-          className="button button-secondary"
-          onClick={() => moveDemand(item.id, 1)}
-          disabled={index === demand.length - 1}
-          aria-label={`Bajar intervalo ${item.id}`}
-          title="Bajar"
-        >
-          ↓
-        </button>
+                    {/* FIN */}
 
-        {/* ELIMINAR */}
-        <button
-          type="button"
-          className="button button-danger"
-          style={{ marginLeft: "auto" }}
-          onClick={() => removeDemand(item.id)}
-        >
-          Eliminar
-        </button>
-      </div>
+                    <input
+                      ref={(
+                        element
+                      ) => {
+                        demandEndRefs.current[
+                          item.id
+                        ] =
+                          element;
+                      }}
+                      className="input input-time"
+                      type="time"
+                      value={
+                        item.end
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        updateDemand(
+                          item.id,
+                          "end",
+                          event.target
+                            .value
+                        )
+                      }
+                      onKeyDown={(
+                        event
+                      ) =>
+                        handleDemandEndKeyDown(
+                          event,
+                          item
+                        )
+                      }
+                      aria-label={`Final del intervalo ${item.id}`}
+                    />
 
-      {/* SELECTOR DE CASILLAS */}
-      <div
-        style={{
-          display: "flex",
-          gap: 24,
-          flexWrap: "wrap",
-        }}
-      >
-        <BoothPicker
-          sector="entrada"
-          count={BOOTH_CATALOG.entrada}
-          selected={item.booths}
-          onToggle={(sector, numero) =>
-            toggleBooth(item.id, sector, numero)
-          }
-        />
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color:
+                          "#777",
+                      }}
+                    >
+                      {
+                        item.booths
+                          .length
+                      }{" "}
+                      casilla
+                      {item.booths
+                        .length ===
+                      1
+                        ? ""
+                        : "s"}{" "}
+                      seleccionada
+                      {item.booths
+                        .length ===
+                      1
+                        ? ""
+                        : "s"}
+                    </span>
 
-        <BoothPicker
-          sector="salida"
-          count={BOOTH_CATALOG.salida}
-          selected={item.booths}
-          onToggle={(sector, numero) =>
-            toggleBooth(item.id, sector, numero)
-          }
-        />
-      </div>
-    </div>
-  ))}
-</div>
+                    {/* SUBIR */}
 
-          <button className="button button-secondary" onClick={addDemand}>
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() =>
+                        moveDemand(
+                          item.id,
+                          -1
+                        )
+                      }
+                      disabled={
+                        index === 0
+                      }
+                      aria-label={`Subir intervalo ${item.id}`}
+                      title="Subir"
+                    >
+                      ↑
+                    </button>
+
+                    {/* BAJAR */}
+
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() =>
+                        moveDemand(
+                          item.id,
+                          1
+                        )
+                      }
+                      disabled={
+                        index ===
+                        demand.length -
+                          1
+                      }
+                      aria-label={`Bajar intervalo ${item.id}`}
+                      title="Bajar"
+                    >
+                      ↓
+                    </button>
+
+                    {/* ELIMINAR */}
+
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      style={{
+                        marginLeft:
+                          "auto",
+                      }}
+                      onClick={() =>
+                        removeDemand(
+                          item.id
+                        )
+                      }
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+
+                  {/* CASILLAS */}
+
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      gap: 24,
+                      flexWrap:
+                        "wrap",
+                    }}
+                  >
+                    <BoothPicker
+                      sector="entrada"
+                      count={
+                        BOOTH_CATALOG.entrada
+                      }
+                      selected={
+                        item.booths
+                      }
+                      onToggle={(
+                        sector,
+                        numero
+                      ) =>
+                        toggleBooth(
+                          item.id,
+                          sector,
+                          numero
+                        )
+                      }
+                    />
+
+                    <BoothPicker
+                      sector="salida"
+                      count={
+                        BOOTH_CATALOG.salida
+                      }
+                      selected={
+                        item.booths
+                      }
+                      onToggle={(
+                        sector,
+                        numero
+                      ) =>
+                        toggleBooth(
+                          item.id,
+                          sector,
+                          numero
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+
+          <button
+            className="button button-secondary"
+            onClick={
+              addDemand
+            }
+          >
             + Agregar intervalo
           </button>
         </section>
 
-        {result.error && <div className="error">{result.error}</div>}
+        {/* =================================================
+            ERROR
+        ================================================= */}
+
+        {result.error && (
+          <div className="error">
+            {result.error}
+          </div>
+        )}
+
+        {/* =================================================
+            RESULTADO
+        ================================================= */}
 
         {result.stats && (
-          <section style={{ marginTop: 40 }}>
-            <h2>Resultado</h2>
+          <section
+            style={{
+              marginTop: 40,
+            }}
+          >
+            <h2>
+              Resultado
+            </h2>
 
             <div className="stats">
+
               <div className="stat">
-                <div className="stat-label">Demanda total</div>
-                <div className="stat-value">{formatMinutes(result.stats.totalWork)}</div>
+                <div className="stat-label">
+                  Demanda nueva
+                </div>
+
+                <div className="stat-value">
+                  {formatMinutes(
+                    result.stats
+                      .demandWork
+                  )}
+                </div>
               </div>
+
               <div className="stat">
-                <div className="stat-label">Objetivo por agente</div>
-                <div className="stat-value">{result.stats.target.toFixed(1)} min</div>
+                <div className="stat-label">
+                  Carga previa
+                </div>
+
+                <div className="stat-value">
+                  {formatMinutes(
+                    result.stats
+                      .historicalWork
+                  )}
+                </div>
               </div>
+
               <div className="stat">
-                <div className="stat-label">Menor carga</div>
-                <div className="stat-value">{formatMinutes(result.stats.minMinutes)}</div>
+                <div className="stat-label">
+                  Carga global
+                </div>
+
+                <div className="stat-value">
+                  {formatMinutes(
+                    result.stats
+                      .globalWork
+                  )}
+                </div>
               </div>
+
               <div className="stat">
-                <div className="stat-label">Diferencia máxima</div>
+                <div className="stat-label">
+                  Objetivo por agente
+                </div>
+
+                <div className="stat-value">
+                  {result.stats.target.toFixed(
+                    1
+                  )}{" "}
+                  min
+                </div>
+              </div>
+
+              <div className="stat">
+                <div className="stat-label">
+                  Menor carga total
+                </div>
+
+                <div className="stat-value">
+                  {formatMinutes(
+                    result.stats
+                      .minMinutes
+                  )}
+                </div>
+              </div>
+
+              <div className="stat">
+                <div className="stat-label">
+                  Diferencia máxima
+                </div>
+
                 <div
-                  className={`stat-value ${result.stats.difference <= 1 ? "good" : "warning"}`}
+                  className={
+                    `stat-value ${
+                      result.stats
+                        .difference <=
+                      1
+                        ? "good"
+                        : "warning"
+                    }`
+                  }
                 >
-                  {result.stats.difference} min
+                  {
+                    result.stats
+                      .difference
+                  }{" "}
+                  min
                 </div>
               </div>
             </div>
+
+            {/* =================================================
+                TABLA
+            ================================================= */}
 
             <div className="table-wrapper">
               <table className="schedule-table">
                 <thead>
                   <tr>
-                    <th>Agente</th>
-                    <th>Total</th>
-                    <th>Turnos</th>
+                    <th>
+                      Agente
+                    </th>
+
+                    <th>
+                      Previo
+                    </th>
+
+                    <th>
+                      Nuevo
+                    </th>
+
+                    <th>
+                      Total
+                    </th>
+
+                    <th>
+                      Turnos
+                    </th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {result.schedule.map((agent) => (
-                    <tr key={agent.id}>
-                      <td style={{ padding: 8, verticalAlign: "top" }}>
-                        <strong>{agent.name}</strong>
-                        <div style={{ fontSize: 12, color: "#777", marginTop: 4 }}>
-                          ID {agent.id}
-                        </div>
-                      </td>
-                      <td style={{ padding: 8, verticalAlign: "top" }}>
-                        {formatMinutes(agent.minutes)}
-                      </td>
-                      <td style={{ padding: 8 }}>
-                        {agent.assignments.map((assignment, index) => (
-                          <div key={index} className="assignment">
-                            <span className="assignment-booth">{assignment.booth}</span>
-                            {" — "}
-                            <span className="assignment-time">
-                              {minutesToTime(assignment.start)} → {minutesToTime(assignment.end)}
-                            </span>
-                            {" — "}
-                            <span>{assignment.minutes} min</span>
-                          </div>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
+                  {result.schedule.map(
+                    (agent) => {
+                      const total =
+                        agent.workedMinutes +
+                        agent.minutes;
+
+                      return (
+                        <tr
+                          key={
+                            agent.id
+                          }
+                        >
+                          <td
+                            style={{
+                              padding: 8,
+                              verticalAlign:
+                                "top",
+                            }}
+                          >
+                            <strong>
+                              {
+                                agent.name
+                              }
+                            </strong>
+
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color:
+                                  "#777",
+                                marginTop: 4,
+                              }}
+                            >
+                              ID{" "}
+                              {
+                                agent.id
+                              }
+                            </div>
+                          </td>
+
+                          <td
+                            style={{
+                              padding: 8,
+                              verticalAlign:
+                                "top",
+                            }}
+                          >
+                            {formatMinutes(
+                              agent.workedMinutes
+                            )}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: 8,
+                              verticalAlign:
+                                "top",
+                            }}
+                          >
+                            {formatMinutes(
+                              agent.minutes
+                            )}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: 8,
+                              verticalAlign:
+                                "top",
+                              fontWeight:
+                                700,
+                            }}
+                          >
+                            {formatMinutes(
+                              total
+                            )}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            {agent.assignments.map(
+                              (
+                                assignment,
+                                index
+                              ) => (
+                                <div
+                                  key={
+                                    index
+                                  }
+                                  className="assignment"
+                                >
+                                  <span className="assignment-booth">
+                                    {
+                                      assignment.booth
+                                    }
+                                  </span>
+
+                                  {" — "}
+
+                                  <span className="assignment-time">
+                                    {minutesToTime(
+                                      assignment.start
+                                    )}{" "}
+                                    →
+                                    {" "}
+                                    {minutesToTime(
+                                      assignment.end
+                                    )}
+                                  </span>
+
+                                  {" — "}
+
+                                  <span>
+                                    {
+                                      assignment.minutes
+                                    }{" "}
+                                    min
+                                  </span>
+                                </div>
+                              )
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }
+                  )}
                 </tbody>
               </table>
             </div>
-                    <div style={{ marginTop: 20 }}>
-  <button
-    className="button button-primary"
-    onClick={copyPlainTextSchedule}
-  >
-    📋 Copiar horario para mensaje
-  </button>
-      <button
-  className="button button-danger"
-  onClick={resetData}
->
-  🗑️ Restablecer datos
-</button>
 
-</div>  
+            {/* =================================================
+                ACCIONES
+            ================================================= */}
+
+            <div
+              style={{
+                marginTop: 20,
+              }}
+            >
+              <button
+                className="button button-primary"
+                onClick={
+                  copyPlainTextSchedule
+                }
+              >
+                📋 Copiar horario para mensaje
+              </button>
+
+              <button
+                className="button button-danger"
+                onClick={
+                  resetData
+                }
+              >
+                🗑️ Restablecer datos
+              </button>
+            </div>
           </section>
         )}
       </div>
