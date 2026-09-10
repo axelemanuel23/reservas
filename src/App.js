@@ -288,13 +288,6 @@ function calculateHistoricalWork(agents) {
   );
 }
 
-function calculateGlobalWork(agents, demand) {
-  return (
-    calculateHistoricalWork(agents) +
-    calculateDemandWork(demand)
-  );
-}
-
 // =========================================================
 // OBJETIVOS
 // =========================================================
@@ -2169,20 +2162,6 @@ export default function App() {
       ]?.focus();
 
       agentInputRefs.current[
-        uid
-      ]?.select();
-    });
-  }
-
-  function focusWorkedMinutes(
-    uid
-  ) {
-    requestAnimationFrame(() => {
-      workedMinutesRefs.current[
-        uid
-      ]?.focus();
-
-      workedMinutesRefs.current[
         uid
       ]?.select();
     });
