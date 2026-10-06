@@ -445,9 +445,15 @@ function planMultiBoothBlocks(agents, demand, overloadedIds) {
         "asc"
       ).sort((a, b) => a.id - b.id);
 
-      selected.forEach((agent, index) => {
-        register(agent, boothLabel(booths[index]), current, sliceEnd, false);
-      });
+      for (let index = 0; index < selected.length; index += 1) {
+        register(
+          selected[index],
+          boothLabel(booths[index]),
+          current,
+          sliceEnd,
+          false
+        );
+      }
 
       current = sliceEnd;
     }
