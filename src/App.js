@@ -1055,132 +1055,35 @@ function BoothPicker({
 // TEXTO PARA COPIAR
 // =========================================================
 
-function generatePlainTextSchedule(
-  schedule
-) {
-  const timePoints = [
-    ...new Set(
-      schedule.flatMap(
-        (agent) =>
-          agent.assignments.flatMap(
-            (assignment) => [
-              assignment.start,
-              assignment.end,
-            ]
-          )
-      )
-    ),
-  ].sort((a, b) => a - b);
+function generatePlainTextSchedule(schedule) {
+  const lines = ["Guardia Nocturna"];
 
-  const rows = [];
-
-  for (
-    let i = 0;
-    i <
-    timePoints.length - 1;
-    i++
-  ) {
-    const start =
-      timePoints[i];
-
-    const end =
-      timePoints[i + 1];
-
-    const active =
-      schedule
-        .map((agent) => {
-          const assignment =
-            agent.assignments.find(
-              (a) =>
-                a.start <= start &&
-                a.end >= end
-            );
-
-          if (!assignment) {
-            return null;
-          }
-
-          return {
-            agent: agent.name,
-            booth:
-              assignment.booth,
-          };
-        })
-        .filter(Boolean);
-
-    if (active.length === 0) {
+  for (const agent of schedule) {
+    if (!agent.assignments?.length) {
+      lines.push(`${agent.name} — Sin asignación`);
       continue;
     }
 
-    rows.push({
-      start,
-      end,
-      active,
-    });
-  }
+    const assignments = agent.assignments
+      .sort((a, b) => a.start - b.start)
+      .map((assignment) => {
+        const booth = boothAbbrev(assignment.booth);
 
-  const mergedRows = [];
+        const horario =
+          `${minutesToShortTime(assignment.start)}-${minutesToShortTime(
+            assignment.end
+          )}`;
 
-  for (const row of rows) {
-    const previous =
-      mergedRows[
-        mergedRows.length - 1
-      ];
-
-    const sameAssignments =
-      previous &&
-      JSON.stringify(
-        previous.active
-      ) ===
-        JSON.stringify(
-          row.active
-        ) &&
-      previous.end ===
-        row.start;
-
-    if (sameAssignments) {
-      previous.end = row.end;
-    } else {
-      mergedRows.push({
-        ...row,
+        return `${booth} ${horario}`;
       });
-    }
-  }
-
-  const lines = [
-    "Guardia Nocturna",
-    "Hora -> Agente|Casilla",
-  ];
-
-  for (const row of mergedRows) {
-    const time =
-      `${minutesToShortTime(
-        row.start
-      )}-${minutesToShortTime(
-        row.end
-      )}`;
-
-    const assignments =
-      row.active
-        .map(
-          ({
-            agent,
-            booth,
-          }) =>
-            `${agent}/${boothAbbrev(
-              booth
-            )}`
-        )
-        .join("|");
 
     lines.push(
-      `${time} ${assignments}`
+      `${agent.name} ${assignments.join(" / ")}`
     );
   }
 
   return lines.join("\n");
 }
-
 // =========================================================
 // APP
 // =========================================================
