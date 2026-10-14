@@ -24,7 +24,7 @@ function boothLabel(booth) {
 }
 
 function boothAbbrev(boothText) {
-  return boothText.replace("Entrada ", "E").replace("Salida ", "S");
+  return boothText.replace(/^(Entrada|Salida)\s+/, "C");
 }
 
 function minutesToShortTime(minutes) {
@@ -1056,7 +1056,7 @@ function BoothPicker({
 // =========================================================
 
 function generatePlainTextSchedule(schedule) {
-  const lines = ["Guardia Nocturna"];
+  const lines = [];
 
   for (const agent of schedule) {
     if (!agent.assignments?.length) {
@@ -1077,9 +1077,7 @@ function generatePlainTextSchedule(schedule) {
         return `${booth} ${horario}`;
       });
 
-    lines.push(
-      `${agent.name} ${assignments.join(" / ")}`
-    );
+    lines.push(`${agent.name} ${assignments.join(" / ")}`);
   }
 
   return lines.join("\n");
