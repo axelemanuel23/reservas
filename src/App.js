@@ -24,7 +24,7 @@ function boothLabel(booth) {
 }
 
 function boothAbbrev(boothText) {
-  return boothText.replace(/^(Entrada|Salida)\s+/, "C");
+  return boothText.replace(/^(Entrada|Salida)\s+/, "Cas");
 }
 
 function minutesToShortTime(minutes) {
