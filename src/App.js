@@ -909,6 +909,349 @@ export function runSchedulerTests() {
 }
 
 // =========================================================
+// EXPORTAR / IMPORTAR (pasar un trabajo en curso a otra PC)
+// =========================================================
+//
+// Solo viajan los datos de ENTRADA: agentes (en orden) e
+// intervalos con sus casillas. El horario se recalcula solo.
+//
+// La importación valida únicamente que el texto sea usable
+// (JSON válido, estructura y valores básicos). NO exige un
+// horario completo ni consistente: un trabajo a medio hacer
+// (intervalos sin casillas, agentes sin nombre, superposiciones)
+// debe poder importarse igual; esos problemas los muestra la
+// app en pantalla como siempre.
+// =========================================================
+
+const EXPORT_APP_ID = "guardia-nocturna";
+const EXPORT_VERSION = 1;
+
+const TIME_FORMAT = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function exportStateToJson(agents, demand) {
+  return JSON.stringify(
+    {
+      app: EXPORT_APP_ID,
+      version: EXPORT_VERSION,
+      agents: agents.map((agent) => ({
+        name: agent.name ?? "",
+        workedMinutes: normalizeWorkedMinutes(agent.workedMinutes),
+      })),
+      demand: demand.map((item) => ({
+        start: item.start,
+        end: item.end,
+        booths: item.booths.map((booth) => ({
+          sector: booth.sector,
+          numero: booth.numero,
+        })),
+      })),
+    },
+    null,
+    2
+  );
+}
+
+// Quita las vallas de código (```json ... ```) que a veces
+// agregan los chats al copiar.
+function stripCodeFence(text) {
+  return text
+    .trim()
+    .replace(/^```[a-zA-Z]*\s*/, "")
+    .replace(/\s*```$/, "")
+    .trim();
+}
+
+export function parseImportedState(text) {
+  const fail = (message) => ({ error: message, agents: null, demand: null });
+
+  const clean = stripCodeFence(String(text ?? ""));
+
+  if (!clean) {
+    return fail("Pegá primero el texto exportado.");
+  }
+
+  let data;
+
+  try {
+    data = JSON.parse(clean);
+  } catch {
+    return fail(
+      "El texto no es un JSON válido. Copialo completo desde “Copiar datos”."
+    );
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return fail("El texto no tiene el formato esperado.");
+  }
+
+  if (data.app !== undefined && data.app !== EXPORT_APP_ID) {
+    return fail("El texto no corresponde a esta aplicación.");
+  }
+
+  if (data.version !== undefined && data.version > EXPORT_VERSION) {
+    return fail(
+      "El texto fue exportado con una versión más nueva de la app. " +
+        "Actualizá esta PC antes de importarlo."
+    );
+  }
+
+  if (!Array.isArray(data.agents) || !Array.isArray(data.demand)) {
+    return fail("Faltan la lista de agentes o la de intervalos.");
+  }
+
+  const agents = [];
+
+  for (let i = 0; i < data.agents.length; i++) {
+    const raw = data.agents[i];
+
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return fail(`El agente ${i + 1} no tiene un formato válido.`);
+    }
+
+    agents.push({
+      uid: createUid(),
+      id: i + 1,
+      name: typeof raw.name === "string" ? raw.name : "",
+      workedMinutes: normalizeWorkedMinutes(raw.workedMinutes),
+    });
+  }
+
+  const demand = [];
+
+  for (let i = 0; i < data.demand.length; i++) {
+    const raw = data.demand[i];
+    const label = `El intervalo ${i + 1}`;
+
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return fail(`${label} no tiene un formato válido.`);
+    }
+
+    for (const field of ["start", "end"]) {
+      const value = raw[field];
+
+      // Se admite vacío (trabajo a medio completar), pero no basura.
+      if (typeof value !== "string" || (value !== "" && !TIME_FORMAT.test(value))) {
+        return fail(
+          `${label} tiene una hora inválida en “${
+            field === "start" ? "inicio" : "fin"
+          }”.`
+        );
+      }
+    }
+
+    const rawBooths = raw.booths === undefined ? [] : raw.booths;
+
+    if (!Array.isArray(rawBooths)) {
+      return fail(`${label} tiene una lista de casillas inválida.`);
+    }
+
+    const booths = [];
+
+    for (const booth of rawBooths) {
+      const max =
+        booth && typeof booth === "object"
+          ? BOOTH_CATALOG[booth.sector]
+          : undefined;
+
+      if (
+        !max ||
+        !Number.isInteger(booth.numero) ||
+        booth.numero < 1 ||
+        booth.numero > max
+      ) {
+        return fail(`${label} tiene una casilla inválida.`);
+      }
+
+      booths.push({ sector: booth.sector, numero: booth.numero });
+    }
+
+    demand.push({ id: i + 1, start: raw.start, end: raw.end, booths });
+  }
+
+  return { error: null, agents, demand };
+}
+
+export function runImportExportTests() {
+  const E = (numero) => ({ sector: "entrada", numero });
+  const S = (numero) => ({ sector: "salida", numero });
+
+  const agents = [
+    { uid: "a", id: 1, name: "Juan", workedMinutes: 30 },
+    { uid: "b", id: 2, name: "Pedro", workedMinutes: 0 },
+    { uid: "c", id: 3, name: "Carlos", workedMinutes: 120 },
+    { uid: "d", id: 4, name: "Luis", workedMinutes: 0 },
+  ];
+
+  const demand = [
+    { id: 1, start: "00:00", end: "01:00", booths: [E(1), E(2)] },
+    { id: 2, start: "01:00", end: "04:00", booths: [E(1)] },
+    { id: 3, start: "04:00", end: "05:00", booths: [S(1), S(2)] },
+  ];
+
+  // TEST I1 — ida y vuelta sin pérdidas
+  const json = exportStateToJson(agents, demand);
+  const back = parseImportedState(json);
+
+  console.assert(!back.error, "TEST I1: no debería haber error.");
+  console.assert(
+    JSON.stringify(back.agents.map((a) => [a.id, a.name, a.workedMinutes])) ===
+      JSON.stringify(agents.map((a) => [a.id, a.name, a.workedMinutes])),
+    "TEST I1: los agentes deben conservar orden, nombre y minutos."
+  );
+  console.assert(
+    JSON.stringify(back.demand) === JSON.stringify(demand),
+    "TEST I1: la demanda debe conservarse idéntica."
+  );
+  console.assert(
+    new Set(back.agents.map((a) => a.uid)).size === back.agents.length &&
+      back.agents.every((a) => a.uid && a.uid !== "a"),
+    "TEST I1: los uid se generan nuevos y únicos."
+  );
+
+  // TEST I2 — el horario generado es el mismo antes y después
+  const before = generateSchedule(agents, demand);
+  const after = generateSchedule(back.agents, back.demand);
+
+  console.assert(!after.error, "TEST I2: el horario importado debe generarse.");
+  console.assert(
+    JSON.stringify(before.schedule.map((a) => a.assignments)) ===
+      JSON.stringify(after.schedule.map((a) => a.assignments)),
+    "TEST I2: mismo horario antes y después de exportar/importar."
+  );
+
+  // TEST I3 — un trabajo a medio hacer SÍ se importa
+  const draft = exportStateToJson(
+    [
+      { id: 1, name: "", workedMinutes: 0 },
+      { id: 2, name: "Pedro", workedMinutes: 0 },
+    ],
+    [
+      { id: 1, start: "00:00", end: "01:00", booths: [] },
+      { id: 2, start: "00:30", end: "", booths: [E(3)] },
+    ]
+  );
+  const draftBack = parseImportedState(draft);
+
+  console.assert(
+    !draftBack.error,
+    "TEST I3: un trabajo incompleto debe poder importarse."
+  );
+  console.assert(
+    draftBack.demand[0].booths.length === 0 && draftBack.demand[1].end === "",
+    "TEST I3: se conservan intervalos vacíos y horas sin completar."
+  );
+
+  // TEST I4 — texto inválido
+  console.assert(parseImportedState("").error, "TEST I4: vacío da error.");
+  console.assert(parseImportedState("   ").error, "TEST I4: solo espacios da error.");
+  console.assert(parseImportedState("hola").error, "TEST I4: texto libre da error.");
+  console.assert(parseImportedState("[1,2]").error, "TEST I4: un array da error.");
+  console.assert(parseImportedState("null").error, "TEST I4: null da error.");
+
+  // TEST I5 — estructura incompleta
+  console.assert(
+    parseImportedState('{"agents":[]}').error,
+    "TEST I5: falta la demanda."
+  );
+  console.assert(
+    parseImportedState('{"demand":[]}').error,
+    "TEST I5: faltan los agentes."
+  );
+
+  // TEST I6 — versión más nueva / otra app
+  console.assert(
+    parseImportedState('{"version":99,"agents":[],"demand":[]}').error,
+    "TEST I6: versión más nueva debe rechazarse."
+  );
+  console.assert(
+    parseImportedState('{"app":"otra","agents":[],"demand":[]}').error,
+    "TEST I6: otra aplicación debe rechazarse."
+  );
+
+  // TEST I7 — valores inválidos
+  const withDemand = (item) =>
+    JSON.stringify({ agents: [], demand: [item] });
+
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "25:00", end: "26:00", booths: [] })
+    ).error,
+    "TEST I7: hora fuera de rango."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "0:00", end: "01:00", booths: [] })
+    ).error,
+    "TEST I7: hora sin cero inicial."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "00:00", end: "01:00", booths: [{ sector: "patio", numero: 1 }] })
+    ).error,
+    "TEST I7: sector inexistente."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "00:00", end: "01:00", booths: [E(17)] })
+    ).error,
+    "TEST I7: Entrada 17 no existe (máx. 16)."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "00:00", end: "01:00", booths: [S(12)] })
+    ).error,
+    "TEST I7: Salida 12 no existe (máx. 11)."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "00:00", end: "01:00", booths: [E(1.5)] })
+    ).error,
+    "TEST I7: número no entero."
+  );
+  console.assert(
+    parseImportedState(
+      withDemand({ start: "00:00", end: "01:00", booths: "E1" })
+    ).error,
+    "TEST I7: casillas que no son lista."
+  );
+
+  // TEST I8 — minutos previos se normalizan
+  const messy = parseImportedState(
+    JSON.stringify({
+      agents: [
+        { name: "A", workedMinutes: -10 },
+        { name: "B", workedMinutes: "45.9" },
+        { name: 7, workedMinutes: "x" },
+      ],
+      demand: [],
+    })
+  );
+
+  console.assert(!messy.error, "TEST I8: no debería haber error.");
+  console.assert(
+    JSON.stringify(messy.agents.map((a) => a.workedMinutes)) ===
+      JSON.stringify([0, 45, 0]),
+    "TEST I8: minutos previos normalizados a enteros >= 0."
+  );
+  console.assert(messy.agents[2].name === "", "TEST I8: nombre no textual queda vacío.");
+
+  // TEST I9 — tolera vallas de código y espacios al copiar de un chat
+  const fenced = "  ```json\n" + json + "\n```  ";
+  console.assert(
+    !parseImportedState(fenced).error,
+    "TEST I9: debe tolerar vallas de código."
+  );
+
+  // TEST I10 — no se filtran identificadores internos
+  console.assert(
+    !json.includes('"uid"') && !json.includes('"id"'),
+    "TEST I10: el export no incluye uid ni id."
+  );
+
+  return { back, after, draftBack, messy };
+}
+
+// =========================================================
 // COMPONENTE REACT
 // =========================================================
 
@@ -1150,6 +1493,9 @@ export default function App() {
         return INITIAL_DEMAND;
       }
     });
+
+  const [transferText, setTransferText] = useState("");
+  const [transferMessage, setTransferMessage] = useState(null);
 
   const agentInputRefs =
     useRef({});
@@ -1854,6 +2200,66 @@ export default function App() {
   }
 
   // =======================================================
+  // PASAR TRABAJO A OTRA PC
+  // =======================================================
+
+  async function copyTransferData() {
+    const text = exportStateToJson(agents, demand);
+
+    try {
+      await navigator.clipboard.writeText(text);
+
+      setTransferMessage({
+        type: "ok",
+        text:
+          "Datos copiados. Pegalos en el recuadro de la otra PC " +
+          "y tocá “Importar datos”.",
+      });
+    } catch (error) {
+      console.error("No se pudieron copiar los datos:", error);
+
+      // Plan B: mostrar el texto para copiarlo a mano.
+      setTransferText(text);
+
+      setTransferMessage({
+        type: "error",
+        text:
+          "No se pudo copiar automáticamente. El texto quedó en el " +
+          "recuadro: seleccionalo y copialo a mano.",
+      });
+    }
+  }
+
+  function importTransferData() {
+    const imported = parseImportedState(transferText);
+
+    if (imported.error) {
+      setTransferMessage({ type: "error", text: imported.error });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Se van a reemplazar los ${agents.length} agentes y ` +
+        `${demand.length} intervalos actuales por ` +
+        `${imported.agents.length} agentes y ` +
+        `${imported.demand.length} intervalos importados. ¿Continuar?`
+    );
+
+    if (!confirmed) return;
+
+    setAgents(imported.agents);
+    setDemand(imported.demand);
+    setTransferText("");
+
+    setTransferMessage({
+      type: "ok",
+      text:
+        `Importados ${imported.agents.length} agentes y ` +
+        `${imported.demand.length} intervalos.`,
+    });
+  }
+
+  // =======================================================
   // COPIAR
   // =======================================================
 
@@ -1906,6 +2312,92 @@ export default function App() {
             Distribución automática de agentes y casillas
           </p>
         </header>
+
+        {/* =================================================
+            PASAR TRABAJO A OTRA PC
+        ================================================= */}
+
+        <details
+          className="card"
+          style={{ marginBottom: 24 }}
+        >
+          <summary
+            style={{
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            Pasar este trabajo a otra PC
+          </summary>
+
+          <p
+            className="card-description"
+            style={{ marginTop: 12 }}
+          >
+            Copiá los datos en esta PC, pegalos en el recuadro de la
+            otra y tocá “Importar datos”. Viajan los agentes, sus
+            minutos previos y los intervalos con sus casillas; el
+            horario se recalcula solo. Importar reemplaza lo que haya
+            cargado.
+          </p>
+
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={copyTransferData}
+            >
+              Copiar datos
+            </button>
+          </div>
+
+          <textarea
+            className="input"
+            value={transferText}
+            onChange={(event) => {
+              setTransferText(event.target.value);
+              setTransferMessage(null);
+            }}
+            placeholder="Pegá acá los datos copiados desde otra PC"
+            aria-label="Datos a importar"
+            rows={6}
+            spellCheck={false}
+            style={{
+              width: "100%",
+              marginTop: 12,
+              fontFamily: "monospace",
+              fontSize: 12,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={importTransferData}
+              disabled={!transferText.trim()}
+            >
+              Importar datos
+            </button>
+          </div>
+
+          {transferMessage && (
+            <p
+              role="status"
+              style={{
+                fontSize: 13,
+                marginTop: 8,
+                color:
+                  transferMessage.type === "ok"
+                    ? "#15803d"
+                    : "#b91c1c",
+              }}
+            >
+              {transferMessage.text}
+            </p>
+          )}
+        </details>
 
         {/* =================================================
             AGENTES
